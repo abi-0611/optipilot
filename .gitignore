@@ -30,6 +30,16 @@ go.work.sum
 
 # python Dependency
 .venv
+__pycache__/
+*.py[cod]
+
+# optipilot-forecaster generated artifacts
+optipilot-forecaster/generated_data/
+optipilot-forecaster/model_p50_*.pkl
+optipilot-forecaster/model_p90_*.pkl
+optipilot-forecaster/test_predictions_*.png
+optipilot-forecaster/predictive_vs_reactive_demo_*.png
+optipilot-forecaster/demo_replay_*.csv
 
 # Editor/IDE
 # .idea/
