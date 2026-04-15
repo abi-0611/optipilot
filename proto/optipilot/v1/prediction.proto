@@ -1,0 +1,102 @@
+syntax = "proto3";
+
+package optipilot.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/optipilot/proto/gen/go/optipilot/v1;optipilotv1";
+
+enum ScalingMode {
+  SCALING_MODE_UNSPECIFIED = 0;
+  SCALING_MODE_PREDICTIVE = 1;
+  SCALING_MODE_CONSERVATIVE = 2;
+  SCALING_MODE_REACTIVE = 3;
+}
+
+service OptiPilotService {
+  rpc GetPrediction(GetPredictionRequest) returns (GetPredictionResponse);
+  rpc GetModelStatus(GetModelStatusRequest) returns (GetModelStatusResponse);
+  rpc GetAllServicesStatus(AllServicesStatusRequest) returns (AllServicesStatusResponse);
+  rpc GetServiceMetricsHistory(MetricsHistoryRequest) returns (MetricsHistoryResponse);
+  rpc IngestMetrics(IngestMetricsRequest) returns (IngestMetricsResponse);
+  rpc TriggerRetrain(TriggerRetrainRequest) returns (TriggerRetrainResponse);
+}
+
+message GetPredictionRequest {
+  string service_name = 1;
+  repeated double recent_rps = 2;
+  google.protobuf.Timestamp timestamp = 3;
+}
+
+message GetPredictionResponse {
+  string service_name = 1;
+  double rps_p50 = 2;
+  double rps_p90 = 3;
+  int32 recommended_replicas = 4;
+  ScalingMode scaling_mode = 5;
+  double confidence_score = 6;
+  string reason = 7;
+  string model_version = 8;
+}
+
+message GetModelStatusRequest {
+  string service_name = 1;
+}
+
+message GetModelStatusResponse {
+  string service_name = 1;
+  string model_version = 2;
+  double current_mape = 3;
+  ScalingMode scaling_mode = 4;
+  google.protobuf.Timestamp last_trained_at = 5;
+  google.protobuf.Timestamp last_recalibrated_at = 6;
+  int64 training_data_points = 7;
+}
+
+message AllServicesStatusRequest {}
+
+message AllServicesStatusResponse {
+  repeated GetModelStatusResponse services = 1;
+}
+
+message ServiceMetric {
+  string service_name = 1;
+  double rps = 2;
+  double avg_latency_ms = 3;
+  double p99_latency_ms = 4;
+  int32 active_connections = 5;
+  double cpu_usage_percent = 6;
+  double memory_usage_mb = 7;
+  double error_rate = 8;
+  google.protobuf.Timestamp timestamp = 9;
+}
+
+message MetricsHistoryRequest {
+  string service_name = 1;
+  int32 minutes = 2;
+}
+
+message MetricsHistoryResponse {
+  string service_name = 1;
+  repeated ServiceMetric data_points = 2;
+}
+
+message IngestMetricsRequest {
+  repeated ServiceMetric metrics = 1;
+}
+
+message IngestMetricsResponse {
+  int32 accepted_count = 1;
+  string message = 2;
+}
+
+message TriggerRetrainRequest {
+  string service_name = 1;
+}
+
+message TriggerRetrainResponse {
+  bool success = 1;
+  string new_model_version = 2;
+  double new_mape = 3;
+  string message = 4;
+}

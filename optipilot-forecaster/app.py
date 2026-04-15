@@ -10,36 +10,15 @@ import joblib
 import pandas as pd
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
 
 from autoscaling import compute_replicas, get_confidence_mode
+from models.predict import PredictRequest, PredictResponse
 
 # API requires at least this many recent minute-level points.
 MIN_RECENT_POINTS = 8
 
 # Confidence logic uses the last 3 prediction errors.
 MAX_RECENT_APE_POINTS = 3
-
-
-class PredictRequest(BaseModel):
-    """Incoming payload for one service inference call."""
-
-    service_name: str = Field(min_length=1)
-    recent_rps: list[float] | None = Field(
-        default=None,
-        description="Last N minute-level RPS values (oldest first, newest last).",
-    )
-
-
-class PredictResponse(BaseModel):
-    """Response payload returned to the frontend."""
-
-    service_name: str
-    rps_p50: float
-    rps_p90: float
-    recommended_replicas: int
-    scaling_mode: str
-    reason: str
 
 
 def _parse_minutes_suffix(feature_name: str, prefix: str) -> int:

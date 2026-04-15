@@ -1,0 +1,27 @@
+services:
+  api-gateway:
+    build: ./services/api-gateway
+    container_name: optipilot-api-gateway
+    environment:
+      PORT: "8081"
+    ports:
+      - "8081:8081"
+    restart: unless-stopped
+
+  order-service:
+    build: ./services/order-service
+    container_name: optipilot-order-service
+    environment:
+      PORT: "8082"
+    ports:
+      - "8082:8082"
+    restart: unless-stopped
+
+  payment-service:
+    build: ./services/payment-service
+    container_name: optipilot-payment-service
+    environment:
+      PORT: "8083"
+    ports:
+      - "8083:8083"
+    restart: unless-stopped
