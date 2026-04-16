@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Optional
 
 
 @dataclass
@@ -57,6 +58,18 @@ class PredictionResult:
 
 
 @dataclass
+class StoredPrediction:
+    service_name: str
+    predicted_at: datetime
+    horizon_min: int
+    predicted_rps_p50: float
+    predicted_rps_p90: float
+    scaling_mode: str
+    model_version: str
+    confidence_score: float
+
+
+@dataclass
 class ModelStatus:
     service_name: str
     model_version: str
@@ -65,3 +78,7 @@ class ModelStatus:
     last_trained_at: datetime
     last_recalibrated_at: datetime
     training_data_points: int
+    bias_offset_p50: float = 0.0
+    bias_offset_p90: float = 0.0
+    degraded_to: Optional[str] = None
+    rolling_mape_3h: float = 0.0

@@ -46,9 +46,20 @@ CREATE TABLE IF NOT EXISTS model_status (
     last_trained_at      TIMESTAMP,
     last_recalibrated_at TIMESTAMP,
     training_data_points INTEGER,
+    bias_offset_p50      REAL DEFAULT 0,
+    bias_offset_p90      REAL DEFAULT 0,
+    degraded_to          TEXT,
+    rolling_mape_3h      REAL DEFAULT 0,
     updated_at           TIMESTAMP
 );
 """
+
+_STATUS_MIGRATION_COLUMNS: dict[str, str] = {
+    "bias_offset_p50": "ALTER TABLE model_status ADD COLUMN bias_offset_p50 REAL DEFAULT 0",
+    "bias_offset_p90": "ALTER TABLE model_status ADD COLUMN bias_offset_p90 REAL DEFAULT 0",
+    "degraded_to": "ALTER TABLE model_status ADD COLUMN degraded_to TEXT",
+    "rolling_mape_3h": "ALTER TABLE model_status ADD COLUMN rolling_mape_3h REAL DEFAULT 0",
+}
 
 
 def _row_to_record(row: aiosqlite.Row) -> ModelRecord:
@@ -79,6 +90,10 @@ def _row_to_status(row: aiosqlite.Row) -> ModelStatus:
         last_recalibrated_at=datetime.fromisoformat(row["last_recalibrated_at"])
             if row["last_recalibrated_at"] else datetime.utcnow(),
         training_data_points=row["training_data_points"] or 0,
+        bias_offset_p50=row["bias_offset_p50"] or 0.0,
+        bias_offset_p90=row["bias_offset_p90"] or 0.0,
+        degraded_to=row["degraded_to"],
+        rolling_mape_3h=row["rolling_mape_3h"] or 0.0,
     )
 
 
@@ -94,7 +109,17 @@ class ModelRegistry:
         await self._db.execute(_CREATE_MODELS)
         await self._db.execute(_CREATE_MODELS_IDX)
         await self._db.execute(_CREATE_STATUS)
+        await self._ensure_status_columns()
         await self._db.commit()
+
+    async def _ensure_status_columns(self) -> None:
+        assert self._db is not None
+        async with self._db.execute("PRAGMA table_info(model_status)") as cursor:
+            rows = await cursor.fetchall()
+        existing = {row["name"] for row in rows}
+        for column, stmt in _STATUS_MIGRATION_COLUMNS.items():
+            if column not in existing:
+                await self._db.execute(stmt)
 
     async def register_model(self, record: ModelRecord) -> None:
         assert self._db is not None
@@ -159,8 +184,9 @@ class ModelRegistry:
             """
             INSERT INTO model_status
               (service_name, model_version, current_mape, scaling_mode,
-               last_trained_at, last_recalibrated_at, training_data_points, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+               last_trained_at, last_recalibrated_at, training_data_points,
+               bias_offset_p50, bias_offset_p90, degraded_to, rolling_mape_3h, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(service_name) DO UPDATE SET
               model_version        = excluded.model_version,
               current_mape         = excluded.current_mape,
@@ -168,6 +194,10 @@ class ModelRegistry:
               last_trained_at      = excluded.last_trained_at,
               last_recalibrated_at = excluded.last_recalibrated_at,
               training_data_points = excluded.training_data_points,
+              bias_offset_p50      = excluded.bias_offset_p50,
+              bias_offset_p90      = excluded.bias_offset_p90,
+              degraded_to          = excluded.degraded_to,
+              rolling_mape_3h      = excluded.rolling_mape_3h,
               updated_at           = excluded.updated_at
             """,
             (
@@ -178,6 +208,66 @@ class ModelRegistry:
                 status.last_trained_at.isoformat(),
                 status.last_recalibrated_at.isoformat(),
                 status.training_data_points,
+                status.bias_offset_p50,
+                status.bias_offset_p90,
+                status.degraded_to,
+                status.rolling_mape_3h,
+                datetime.utcnow().isoformat(),
+            ),
+        )
+        await self._db.commit()
+
+    async def update_bias_offsets(
+        self,
+        service_name: str,
+        bias_offset_p50: float,
+        bias_offset_p90: float,
+        recalibrated_at: datetime,
+    ) -> None:
+        assert self._db is not None
+        now = datetime.utcnow().isoformat()
+        await self._db.execute(
+            """
+            INSERT INTO model_status (
+              service_name, bias_offset_p50, bias_offset_p90, last_recalibrated_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(service_name) DO UPDATE SET
+              bias_offset_p50      = excluded.bias_offset_p50,
+              bias_offset_p90      = excluded.bias_offset_p90,
+              last_recalibrated_at = excluded.last_recalibrated_at,
+              updated_at           = excluded.updated_at
+            """,
+            (
+                service_name,
+                bias_offset_p50,
+                bias_offset_p90,
+                recalibrated_at.isoformat(),
+                now,
+            ),
+        )
+        await self._db.commit()
+
+    async def update_drift_state(
+        self,
+        service_name: str,
+        rolling_mape_3h: float,
+        degraded_to: str | None,
+    ) -> None:
+        assert self._db is not None
+        await self._db.execute(
+            """
+            INSERT INTO model_status (service_name, rolling_mape_3h, degraded_to, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(service_name) DO UPDATE SET
+              rolling_mape_3h = excluded.rolling_mape_3h,
+              degraded_to     = excluded.degraded_to,
+              updated_at      = excluded.updated_at
+            """,
+            (
+                service_name,
+                rolling_mape_3h,
+                degraded_to,
                 datetime.utcnow().isoformat(),
             ),
         )

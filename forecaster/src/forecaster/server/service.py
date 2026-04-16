@@ -10,17 +10,27 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 import grpc
 from google.protobuf import timestamp_pb2
 
 from forecaster.config import Config
+from forecaster.ml.inference import InferenceEngine
 from forecaster.ml.trainer import InsufficientDataError, Trainer
-from forecaster.models import ModelStatus, ServiceMetric
+from forecaster.models import ModelStatus, ServiceMetric, StoredPrediction
 from optipilot.v1 import prediction_pb2, prediction_pb2_grpc
 from forecaster.storage.metrics import MetricsStore
 from forecaster.storage.registry import ModelRegistry
+
+if TYPE_CHECKING:
+    from forecaster.ml.scheduler import ForecasterScheduler
+
+_SCALING_MODE_TO_PROTO = {
+    "PREDICTIVE":  prediction_pb2.SCALING_MODE_PREDICTIVE,
+    "CONSERVATIVE": prediction_pb2.SCALING_MODE_CONSERVATIVE,
+    "REACTIVE":    prediction_pb2.SCALING_MODE_REACTIVE,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -100,41 +110,121 @@ class OptiPilotServiceImpl(prediction_pb2_grpc.OptiPilotServiceServicer):
         registry: ModelRegistry,
         metrics: MetricsStore,
         trainer: Trainer,
+        inference: InferenceEngine,
         config: Config,
         logger: logging.Logger,
+        scheduler: "ForecasterScheduler | None" = None,
     ) -> None:
         self._registry = registry
         self._metrics = metrics
         self._trainer = trainer
+        self._inference = inference
         self._config = config
         self._log = logger
+        self._scheduler = scheduler
 
     async def GetPrediction(
         self, request: prediction_pb2.GetPredictionRequest, context: grpc.aio.ServicerContext
     ) -> prediction_pb2.GetPredictionResponse:
         try:
+            service_name = request.service_name
             recent_rps = list(request.recent_rps)
             last_rps = recent_rps[-1] if recent_rps else 0.0
-            rps_p90 = last_rps * 1.2
-            recommended = max(2, int(rps_p90 / 100) + 1)
 
+            # Fetch enough history for the 30-min lag feature (+5 for target horizon).
+            recent_metrics = await self._metrics.get_recent(service_name, minutes=40)
+
+            used_real_model = False
+            result = None
+
+            if len(recent_metrics) >= 30:
+                result = await self._inference.predict(service_name, recent_metrics)
+
+            if result is not None:
+                used_real_model = True
+                proto_mode = _SCALING_MODE_TO_PROTO.get(
+                    result.scaling_mode, prediction_pb2.SCALING_MODE_REACTIVE
+                )
+                predicted_at = _ts_from_proto(request.timestamp)
+                horizon = int(self._config.inference.forecast_horizons_min[0])
+                await self._metrics.insert_prediction(
+                    StoredPrediction(
+                        service_name=service_name,
+                        predicted_at=predicted_at,
+                        horizon_min=horizon,
+                        predicted_rps_p50=result.rps_p50,
+                        predicted_rps_p90=result.rps_p90,
+                        scaling_mode=result.scaling_mode,
+                        model_version=result.model_version,
+                        confidence_score=result.confidence_score,
+                    )
+                )
+                self._log.info(
+                    "GetPrediction",
+                    extra={
+                        "service": service_name,
+                        "version": result.model_version,
+                        "p50": round(result.rps_p50, 2),
+                        "p90": round(result.rps_p90, 2),
+                        "replicas": result.recommended_replicas,
+                        "mode": result.scaling_mode,
+                        "confidence": result.confidence_score,
+                        "used_real_model": True,
+                    },
+                )
+                return prediction_pb2.GetPredictionResponse(
+                    service_name=service_name,
+                    rps_p50=result.rps_p50,
+                    rps_p90=result.rps_p90,
+                    recommended_replicas=result.recommended_replicas,
+                    scaling_mode=proto_mode,
+                    confidence_score=result.confidence_score,
+                    reason=result.reason,
+                    model_version=result.model_version,
+                )
+
+            # Fallback: not enough data or no promoted model yet.
+            reason = (
+                "insufficient history for inference"
+                if len(recent_metrics) < 30
+                else "no promoted model available"
+            )
+            rps_p90 = last_rps * 1.2
+            predicted_at = _ts_from_proto(request.timestamp)
+            horizon = int(self._config.inference.forecast_horizons_min[0])
+            await self._metrics.insert_prediction(
+                StoredPrediction(
+                    service_name=service_name,
+                    predicted_at=predicted_at,
+                    horizon_min=horizon,
+                    predicted_rps_p50=last_rps,
+                    predicted_rps_p90=rps_p90,
+                    scaling_mode="REACTIVE",
+                    model_version="stub-v0",
+                    confidence_score=0.0,
+                )
+            )
             self._log.info(
                 "GetPrediction",
                 extra={
-                    "service": request.service_name,
-                    "recent_rps_count": len(recent_rps),
-                    "last_rps": last_rps,
+                    "service": service_name,
+                    "version": "stub-v0",
+                    "p50": last_rps,
+                    "p90": rps_p90,
+                    "replicas": max(2, int(rps_p90 / 100) + 1),
+                    "mode": "REACTIVE",
+                    "confidence": 0.0,
+                    "used_real_model": False,
                 },
             )
-
             return prediction_pb2.GetPredictionResponse(
-                service_name=request.service_name,
+                service_name=service_name,
                 rps_p50=last_rps,
                 rps_p90=rps_p90,
-                recommended_replicas=recommended,
+                recommended_replicas=max(2, int(rps_p90 / 100) + 1),
                 scaling_mode=prediction_pb2.SCALING_MODE_REACTIVE,
                 confidence_score=0.0,
-                reason="stub: ML model not implemented yet",
+                reason=f"stub: {reason}",
                 model_version="stub-v0",
             )
         except Exception as exc:
@@ -168,6 +258,10 @@ class OptiPilotServiceImpl(prediction_pb2_grpc.OptiPilotServiceServicer):
         try:
             internal = [_proto_to_metric(m) for m in request.metrics]
             count = await self._metrics.insert_batch(internal)
+            if self._scheduler is not None and internal:
+                self._scheduler.register_services(
+                    {metric.service_name for metric in internal}
+                )
             self._log.info(
                 "IngestMetrics",
                 extra={"received": len(request.metrics), "stored": count},
@@ -254,6 +348,8 @@ class OptiPilotServiceImpl(prediction_pb2_grpc.OptiPilotServiceServicer):
 
         try:
             result = await self._trainer.train_service(service_name, metrics)
+            if result.promoted:
+                self._inference.invalidate_cache(service_name)
         except InsufficientDataError as exc:
             self._log.warning(
                 "TriggerRetrain insufficient data",

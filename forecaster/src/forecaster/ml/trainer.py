@@ -60,6 +60,12 @@ _LGB_BASE_PARAMS: dict[str, Any] = {
 _NUM_BOOST_ROUND = 200
 _EARLY_STOPPING_ROUNDS = 20
 _FORECAST_HORIZON_MIN = 5  # primary horizon — predict RPS 5 minutes ahead
+_FULL_RETRAIN_GRID: list[dict[str, float | int]] = [
+    {"num_leaves": 31, "learning_rate": 0.05},
+    {"num_leaves": 63, "learning_rate": 0.05},
+    {"num_leaves": 31, "learning_rate": 0.03},
+    {"num_leaves": 63, "learning_rate": 0.03},
+]
 
 
 @dataclass
@@ -100,7 +106,12 @@ class Trainer:
     # ------------------------------------------------------------------
 
     async def train_service(
-        self, service_name: str, metrics: list[ServiceMetric]
+        self,
+        service_name: str,
+        metrics: list[ServiceMetric],
+        *,
+        use_hyperparameter_search: bool = False,
+        training_window_label: str = "default",
     ) -> TrainingResult:
         start_wall = time.monotonic()
 
@@ -112,7 +123,9 @@ class Trainer:
             )
 
         # CPU-bound section: feature engineering + LightGBM training.
-        training_bundle = await asyncio.to_thread(self._train_sync, metrics)
+        training_bundle = await asyncio.to_thread(
+            self._train_sync, metrics, use_hyperparameter_search
+        )
 
         # ----- Async section: version, persist, register, promote -----
         version = await self._next_version(service_name)
@@ -157,6 +170,7 @@ class Trainer:
         # see the latest training result.
         served_mape = training_bundle["mape_p50"] if promote else previous_mape
         served_version = version if promote else (current.version if current else version)
+        existing_status = await self._registry.get_status(service_name)
         status = ModelStatus(
             service_name=service_name,
             model_version=served_version,
@@ -167,6 +181,10 @@ class Trainer:
             last_trained_at=now,
             last_recalibrated_at=now,
             training_data_points=training_bundle["trained_on_points"],
+            bias_offset_p50=existing_status.bias_offset_p50 if existing_status else 0.0,
+            bias_offset_p90=existing_status.bias_offset_p90 if existing_status else 0.0,
+            degraded_to=existing_status.degraded_to if existing_status else None,
+            rolling_mape_3h=existing_status.rolling_mape_3h if existing_status else 0.0,
         )
         await self._registry.upsert_status(status)
 
@@ -181,6 +199,9 @@ class Trainer:
                 "mape_p90": round(training_bundle["mape_p90"], 4),
                 "promoted": promote,
                 "previous_mape": round(previous_mape, 4),
+                "training_window_label": training_window_label,
+                "selected_num_leaves": training_bundle["selected_num_leaves"],
+                "selected_learning_rate": training_bundle["selected_learning_rate"],
                 "duration_sec": round(duration, 2),
             },
         )
@@ -204,7 +225,9 @@ class Trainer:
     # Internals
     # ------------------------------------------------------------------
 
-    def _train_sync(self, metrics: list[ServiceMetric]) -> dict[str, Any]:
+    def _train_sync(
+        self, metrics: list[ServiceMetric], use_hyperparameter_search: bool
+    ) -> dict[str, Any]:
         """All CPU-bound work in one function (called via asyncio.to_thread)."""
         X, y, ts = build_features(metrics, horizon_min=_FORECAST_HORIZON_MIN)
 
@@ -229,23 +252,65 @@ class Trainer:
             X_val, label=y_val, reference=train_ds, feature_name=FEATURE_NAMES
         )
 
-        booster_p50 = _train_quantile_model(train_ds, val_ds, alpha=0.5)
-        booster_p90 = _train_quantile_model(train_ds, val_ds, alpha=0.9)
+        if use_hyperparameter_search:
+            candidates = _FULL_RETRAIN_GRID
+        else:
+            candidates = [{"num_leaves": _LGB_BASE_PARAMS["num_leaves"], "learning_rate": _LGB_BASE_PARAMS["learning_rate"]}]
 
-        pred_p50 = booster_p50.predict(X_val, num_iteration=booster_p50.best_iteration)
-        pred_p90 = booster_p90.predict(X_val, num_iteration=booster_p90.best_iteration)
+        best_bundle: dict[str, Any] | None = None
+        best_score = float("inf")
+        y_val_np = y_val.to_numpy()
 
-        mape_p50 = compute_mape(y_val.to_numpy(), np.asarray(pred_p50))
-        mape_p90 = compute_mape(y_val.to_numpy(), np.asarray(pred_p90))
+        for candidate in candidates:
+            booster_p50 = _train_quantile_model(
+                train_ds,
+                val_ds,
+                alpha=0.5,
+                num_leaves=int(candidate["num_leaves"]),
+                learning_rate=float(candidate["learning_rate"]),
+            )
+            booster_p90 = _train_quantile_model(
+                train_ds,
+                val_ds,
+                alpha=0.9,
+                num_leaves=int(candidate["num_leaves"]),
+                learning_rate=float(candidate["learning_rate"]),
+            )
+
+            pred_p50 = booster_p50.predict(
+                X_val, num_iteration=booster_p50.best_iteration
+            )
+            pred_p90 = booster_p90.predict(
+                X_val, num_iteration=booster_p90.best_iteration
+            )
+
+            mape_p50 = compute_mape(y_val_np, np.asarray(pred_p50))
+            mape_p90 = compute_mape(y_val_np, np.asarray(pred_p90))
+            combined = (mape_p50 + mape_p90) / 2.0
+            if combined < best_score:
+                best_score = combined
+                best_bundle = {
+                    "booster_p50": booster_p50,
+                    "booster_p90": booster_p90,
+                    "mape_p50": mape_p50,
+                    "mape_p90": mape_p90,
+                    "selected_num_leaves": int(candidate["num_leaves"]),
+                    "selected_learning_rate": float(candidate["learning_rate"]),
+                }
+
+        if best_bundle is None:
+            raise RuntimeError("failed to train quantile models")
 
         return {
-            "booster_p50": booster_p50,
-            "booster_p90": booster_p90,
-            "mape_p50": mape_p50,
-            "mape_p90": mape_p90,
+            "booster_p50": best_bundle["booster_p50"],
+            "booster_p90": best_bundle["booster_p90"],
+            "mape_p50": best_bundle["mape_p50"],
+            "mape_p90": best_bundle["mape_p90"],
             "trained_on_points": int(len(X_train)),
             "training_window_start": _to_utc(ts[0]),
             "training_window_end": _to_utc(ts[-1]),
+            "selected_num_leaves": best_bundle["selected_num_leaves"],
+            "selected_learning_rate": best_bundle["selected_learning_rate"],
         }
 
     async def _next_version(self, service_name: str) -> str:
@@ -278,10 +343,20 @@ class Trainer:
 # ---------------------------------------------------------------------------
 
 def _train_quantile_model(
-    train_ds: lgb.Dataset, val_ds: lgb.Dataset, alpha: float
+    train_ds: lgb.Dataset,
+    val_ds: lgb.Dataset,
+    alpha: float,
+    *,
+    num_leaves: int,
+    learning_rate: float,
 ) -> lgb.Booster:
     """Train one quantile model with early stopping on the validation set."""
-    params = {**_LGB_BASE_PARAMS, "alpha": alpha}
+    params = {
+        **_LGB_BASE_PARAMS,
+        "alpha": alpha,
+        "num_leaves": num_leaves,
+        "learning_rate": learning_rate,
+    }
     return lgb.train(
         params,
         train_ds,

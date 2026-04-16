@@ -19,6 +19,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../..', 'gen', 'p
 from pathlib import Path
 
 from forecaster.config import load_config
+from forecaster.ml.inference import InferenceEngine
+from forecaster.ml.scheduler import ForecasterScheduler
 from forecaster.ml.trainer import Trainer
 from forecaster.server.grpc_server import serve
 from forecaster.storage.metrics import MetricsStore
@@ -98,6 +100,15 @@ async def main_async() -> None:
     models_dir = Path(config.training.models_dir)
     models_dir.mkdir(parents=True, exist_ok=True)
     trainer = Trainer(config, registry, models_dir, logger)
+    inference = InferenceEngine(registry, models_dir, config, logger)
+    scheduler = ForecasterScheduler(
+        config=config,
+        metrics_store=metrics,
+        registry=registry,
+        trainer=trainer,
+        inference=inference,
+        logger=logger,
+    )
 
     logger.info(
         "forecaster starting",
@@ -119,13 +130,23 @@ async def main_async() -> None:
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, _handle_signal)
 
-    server = await serve(config, registry, metrics, trainer, logger)
+    await scheduler.start()
+    server = await serve(
+        config,
+        registry,
+        metrics,
+        trainer,
+        inference,
+        logger,
+        scheduler=scheduler,
+    )
 
     await stop_event.wait()
 
     logger.info("shutting down")
     # Give in-flight RPCs up to 5 seconds to complete
     await server.stop(grace=5)
+    await scheduler.shutdown()
     await registry.close()
     await metrics.close()
     logger.info("shutdown complete")
