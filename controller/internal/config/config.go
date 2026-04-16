@@ -1,6 +1,3 @@
-// Package config loads OptiPilot controller configuration from YAML and
-// applies environment variable overrides. The controller is a single binary,
-// so this package is the only source of truth for runtime configuration.
 package config
 
 import (
@@ -12,8 +9,19 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Config is the top-level controller configuration. Field grouping mirrors
-// the YAML schema documented in optipilot.yaml.
+const (
+	DiscoveryModeStatic     = "static"
+	DiscoveryModeKubernetes = "kubernetes"
+)
+
+
+const (
+	ScalingModeShadow     = "shadow" // observation only, recorded in database for auditing/test
+	ScalingModeRecommend  = "recommend" // Advisory mode
+	ScalingModeAutonomous = "autonomous" // full automation
+)
+
+// Top level configuration for the optipilot.yaml
 type Config struct {
 	Prometheus PrometheusConfig `yaml:"prometheus"`
 	Discovery  DiscoveryConfig  `yaml:"discovery"`
@@ -24,17 +32,17 @@ type Config struct {
 	Storage    StorageConfig    `yaml:"storage"`
 }
 
+// PrometheusConfig holds promethus server address and query timeout settings. 
 type PrometheusConfig struct {
-	Address         string `yaml:"address"`
-	QueryTimeoutSec int    `yaml:"query_timeout_sec"`
+	Address         string `yaml:"address"` // address of the Prometheus server, e.g. "http://localhost:9090"
+	QueryTimeoutSec int    `yaml:"query_timeout_sec"` // timeout for prometheus queries, in seconds
 }
 
-// DiscoveryMode values.
-const (
-	DiscoveryModeStatic     = "static"
-	DiscoveryModeKubernetes = "kubernetes"
-)
-
+// DiscoveryConfig holds settings related to service discovery
+// which determines what services optipilot will attempt to scale
+// two modes are available static and kubernetes
+// static mode for the development
+// kubernetes mode for production discover through kubernetes API
 type DiscoveryConfig struct {
 	Mode           string                `yaml:"mode"`
 	StaticServices []StaticServiceConfig `yaml:"static_services"`
@@ -62,12 +70,6 @@ type CollectorConfig struct {
 	MetricsPath string `yaml:"metrics_path"`
 }
 
-// ScalingMode values (per-service or global).
-const (
-	ScalingModeShadow     = "shadow"
-	ScalingModeRecommend  = "recommend"
-	ScalingModeAutonomous = "autonomous"
-)
 
 type ScalingConfig struct {
 	Mode                 string  `yaml:"mode"`
@@ -75,7 +77,14 @@ type ScalingConfig struct {
 	ScaleDownCooldownSec int     `yaml:"scale_down_cooldown_sec"`
 	DefaultMinReplicas   int32   `yaml:"default_min_replicas"`
 	DefaultMaxReplicas   int32   `yaml:"default_max_replicas"`
+
+	// restricts how much can scale in single decision cycle
+	// example if current replicas is 10, and max_change_percent is 50
+	// max scale up is 15, max scale down is 5
 	MaxChangePercent     int     `yaml:"max_change_percent"`
+
+	// adds extra capacity to predicted replica count
+	// if predicted replicas is 10, and headroom_factor is 0.2, final replicas is 12
 	HeadroomFactor       float64 `yaml:"headroom_factor"`
 }
 
