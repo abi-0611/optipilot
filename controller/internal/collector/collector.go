@@ -38,10 +38,10 @@ type promClient interface {
 // Collector ties discovery, Prometheus, and the store together into a
 // single collection loop.
 type Collector struct {
-	discovery  discovery.ServiceDiscovery
-	store      store.Store
-	prom       promClient
-	cfg        CollectorConfig
+	discovery discovery.ServiceDiscovery
+	store     store.Store
+	prom      promClient
+	cfg       CollectorConfig
 
 	cache   map[string]*models.ServiceMetrics
 	cacheMu sync.RWMutex
@@ -225,38 +225,38 @@ type metricQuery struct {
 
 var defaultQueries = []metricQuery{
 	{
-		name: "rps",
-		tmpl: `rate(http_requests_total{service="%s"}[1m])`,
+		name:  "rps",
+		tmpl:  `rate(http_requests_total{service="%s"}[1m])`,
 		apply: func(m *models.ServiceMetrics, v float64) { m.RPS = v },
 	},
 	{
-		name: "avg_latency_ms",
-		tmpl: `rate(http_request_duration_seconds_sum{service="%s"}[1m]) / rate(http_request_duration_seconds_count{service="%s"}[1m]) * 1000`,
+		name:  "avg_latency_ms",
+		tmpl:  `rate(http_request_duration_seconds_sum{service="%s"}[1m]) / rate(http_request_duration_seconds_count{service="%s"}[1m]) * 1000`,
 		apply: func(m *models.ServiceMetrics, v float64) { m.AvgLatencyMs = v },
 	},
 	{
-		name: "p95_latency_ms",
-		tmpl: `histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{service="%s"}[1m])) * 1000`,
+		name:  "p95_latency_ms",
+		tmpl:  `histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{service="%s"}[1m])) * 1000`,
 		apply: func(m *models.ServiceMetrics, v float64) { m.P95LatencyMs = v },
 	},
 	{
-		name: "p99_latency_ms",
-		tmpl: `histogram_quantile(0.99, rate(http_request_duration_seconds_bucket{service="%s"}[1m])) * 1000`,
+		name:  "p99_latency_ms",
+		tmpl:  `histogram_quantile(0.99, rate(http_request_duration_seconds_bucket{service="%s"}[1m])) * 1000`,
 		apply: func(m *models.ServiceMetrics, v float64) { m.P99LatencyMs = v },
 	},
 	{
-		name: "cpu_percent",
-		tmpl: `rate(container_cpu_usage_seconds_total{pod=~"%s.*"}[1m]) * 100`,
+		name:  "cpu_percent",
+		tmpl:  `rate(container_cpu_usage_seconds_total{pod=~"%s.*"}[1m]) * 100`,
 		apply: func(m *models.ServiceMetrics, v float64) { m.CPUPercent = v },
 	},
 	{
-		name: "memory_mb",
-		tmpl: `container_memory_working_set_bytes{pod=~"%s.*"} / 1024 / 1024`,
+		name:  "memory_mb",
+		tmpl:  `container_memory_working_set_bytes{pod=~"%s.*"} / 1024 / 1024`,
 		apply: func(m *models.ServiceMetrics, v float64) { m.MemoryMB = v },
 	},
 	{
-		name: "error_rate",
-		tmpl: `rate(http_requests_total{service="%s",code=~"5.."}[1m]) / rate(http_requests_total{service="%s"}[1m])`,
+		name:  "error_rate",
+		tmpl:  `rate(http_requests_total{service="%s",code=~"5.."}[1m]) / rate(http_requests_total{service="%s"}[1m])`,
 		apply: func(m *models.ServiceMetrics, v float64) { m.ErrorRate = v },
 	},
 }

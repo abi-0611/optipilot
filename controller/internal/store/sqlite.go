@@ -13,6 +13,52 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+const schemaDDL = `
+CREATE TABLE IF NOT EXISTS service_metrics (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    service_name    TEXT    NOT NULL,
+    rps             REAL    NOT NULL,
+    avg_latency_ms  REAL    NOT NULL,
+    p95_latency_ms  REAL    NOT NULL,
+    p99_latency_ms  REAL    NOT NULL,
+    active_conns    INTEGER NOT NULL,
+    cpu_percent     REAL    NOT NULL,
+    memory_mb       REAL    NOT NULL,
+    error_rate      REAL    NOT NULL,
+    collected_at    DATETIME NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_metrics_service_time
+    ON service_metrics (service_name, collected_at);
+
+CREATE TABLE IF NOT EXISTS scaling_decisions (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    service_name     TEXT    NOT NULL,
+    old_replicas     INTEGER NOT NULL,
+    new_replicas     INTEGER NOT NULL,
+    scaling_mode     TEXT    NOT NULL,
+    model_version    TEXT    NOT NULL,
+    reason           TEXT    NOT NULL,
+    rps_p50          REAL    NOT NULL,
+    rps_p90          REAL    NOT NULL,
+    confidence_score REAL    NOT NULL,
+    executed         BOOLEAN NOT NULL,
+    created_at       DATETIME NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_decisions_service
+    ON scaling_decisions (service_name, created_at);
+
+CREATE TABLE IF NOT EXISTS model_status (
+    service_name          TEXT PRIMARY KEY,
+    model_version         TEXT NOT NULL,
+    current_mape          REAL NOT NULL,
+    scaling_mode          TEXT NOT NULL,
+    last_trained_at       DATETIME NOT NULL,
+    last_recalibrated_at  DATETIME NOT NULL,
+    training_data_points  INTEGER NOT NULL,
+    updated_at            DATETIME NOT NULL
+);
+`
+
 // SQLiteStore is the production implementation of Store. It is safe for
 // concurrent use: *sql.DB manages its own connection pool, and prepared
 // statements are goroutine-safe.
@@ -59,52 +105,6 @@ func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
 	}
 	return s, nil
 }
-
-const schemaDDL = `
-CREATE TABLE IF NOT EXISTS service_metrics (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    service_name    TEXT    NOT NULL,
-    rps             REAL    NOT NULL,
-    avg_latency_ms  REAL    NOT NULL,
-    p95_latency_ms  REAL    NOT NULL,
-    p99_latency_ms  REAL    NOT NULL,
-    active_conns    INTEGER NOT NULL,
-    cpu_percent     REAL    NOT NULL,
-    memory_mb       REAL    NOT NULL,
-    error_rate      REAL    NOT NULL,
-    collected_at    DATETIME NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_metrics_service_time
-    ON service_metrics (service_name, collected_at);
-
-CREATE TABLE IF NOT EXISTS scaling_decisions (
-    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    service_name     TEXT    NOT NULL,
-    old_replicas     INTEGER NOT NULL,
-    new_replicas     INTEGER NOT NULL,
-    scaling_mode     TEXT    NOT NULL,
-    model_version    TEXT    NOT NULL,
-    reason           TEXT    NOT NULL,
-    rps_p50          REAL    NOT NULL,
-    rps_p90          REAL    NOT NULL,
-    confidence_score REAL    NOT NULL,
-    executed         BOOLEAN NOT NULL,
-    created_at       DATETIME NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_decisions_service
-    ON scaling_decisions (service_name, created_at);
-
-CREATE TABLE IF NOT EXISTS model_status (
-    service_name          TEXT PRIMARY KEY,
-    model_version         TEXT NOT NULL,
-    current_mape          REAL NOT NULL,
-    scaling_mode          TEXT NOT NULL,
-    last_trained_at       DATETIME NOT NULL,
-    last_recalibrated_at  DATETIME NOT NULL,
-    training_data_points  INTEGER NOT NULL,
-    updated_at            DATETIME NOT NULL
-);
-`
 
 func applySchema(db *sql.DB) error {
 	_, err := db.ExecContext(context.Background(), schemaDDL)

@@ -31,7 +31,7 @@ type ServiceDiscovery interface {
 type EventType int
 
 const (
-	EventAdded   EventType = iota
+	EventAdded EventType = iota
 	EventRemoved
 	EventUpdated
 )

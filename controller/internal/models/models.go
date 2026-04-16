@@ -6,6 +6,21 @@ package models
 
 import "time"
 
+// ServiceLifecycleState is the controller's notion of where a service is in
+// its onboarding journey. Drives whether scaling decisions get applied.
+type ServiceLifecycleState string
+
+const (
+	// StateLearning: collecting data, no model yet.
+	StateLearning ServiceLifecycleState = "learning"
+	// StateShadow: model exists, decisions recorded but not applied.
+	StateShadow ServiceLifecycleState = "shadow"
+	// StateActive: model trusted, decisions applied to the cluster.
+	StateActive ServiceLifecycleState = "active"
+	// StateDegraded: model accuracy regressed; fall back to safer behavior.
+	StateDegraded ServiceLifecycleState = "degraded"
+)
+
 // ServiceTarget describes a service that the controller manages. It is
 // produced by the discovery layer (static config or Kubernetes informer) and
 // consumed by every other component. The struct deliberately carries no
@@ -18,9 +33,12 @@ type ServiceTarget struct {
 	MaxReplicas int32
 	// ScalingMode is a per-service override of the global scaling mode.
 	// Empty string means "inherit global default".
-	ScalingMode string
-	Labels      map[string]string
-	Annotations map[string]string
+	ScalingMode     string
+	ScalingTier     string
+	VerticalScaling bool
+	Labels          map[string]string
+	Annotations     map[string]string
+	LastSeen        time.Time
 }
 
 // ServiceMetrics is one observation of a service's runtime behavior. The
@@ -41,10 +59,10 @@ type ServiceMetrics struct {
 // ScalingDecision records a scaling action the controller chose to take (or
 // would have taken in shadow mode). Persisted for audit and replay.
 type ScalingDecision struct {
-	ID           int64
-	ServiceName  string
-	OldReplicas  int32
-	NewReplicas  int32
+	ID          int64
+	ServiceName string
+	OldReplicas int32
+	NewReplicas int32
 	// ScalingMode here is the *strategy* that produced the decision
 	// (PREDICTIVE / CONSERVATIVE / REACTIVE), not the per-service mode.
 	ScalingMode     string
@@ -71,21 +89,6 @@ type ModelStatus struct {
 	TrainingDataPoints int64
 	UpdatedAt          time.Time
 }
-
-// ServiceLifecycleState is the controller's notion of where a service is in
-// its onboarding journey. Drives whether scaling decisions get applied.
-type ServiceLifecycleState string
-
-const (
-	// StateLearning: collecting data, no model yet.
-	StateLearning ServiceLifecycleState = "learning"
-	// StateShadow: model exists, decisions recorded but not applied.
-	StateShadow ServiceLifecycleState = "shadow"
-	// StateActive: model trusted, decisions applied to the cluster.
-	StateActive ServiceLifecycleState = "active"
-	// StateDegraded: model accuracy regressed; fall back to safer behavior.
-	StateDegraded ServiceLifecycleState = "degraded"
-)
 
 // ServiceState is the live, in-memory snapshot for a single service. The
 // reconciliation loop assembles one of these per discovered service on every

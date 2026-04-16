@@ -37,6 +37,18 @@ scaling:
   default_max_replicas: 15
   max_change_percent: 50             # rate limit: max 50% replica change per cycle
   headroom_factor: 0.20
+  global_kill_switch: false
+  rollback_monitoring_minutes: 5
+  rollback_error_rate_threshold: 0.02
+  rollback_latency_increase_percent: 30
+  conservative_mode_minutes: 30
+
+kube:
+  kubeconfig_path: ""                 # in-cluster first, then this path, then $KUBECONFIG/~/.kube/config
+  kill_switch_configmap_namespace: "" # defaults to service namespace when empty
+  kill_switch_configmap_name: ""      # optional; when set, read global/service kill switches
+  kill_switch_global_key: "global"
+  kill_switch_service_prefix: "service."
 
 forecaster:
   grpc_address: "localhost:50051"
@@ -45,6 +57,12 @@ forecaster:
 server:
   http_port: 8080
   websocket_path: "/ws/events"
+
+predictor:
+  interval_sec: 60
+  lookback_minutes: 30
+  min_data_points: 10
+  ingest_batch_size: 500
 
 storage:
   db_path: "optipilot.db"

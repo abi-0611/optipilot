@@ -17,9 +17,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/optipilot/controller/internal/actuator"
 	"github.com/optipilot/controller/internal/collector"
 	"github.com/optipilot/controller/internal/config"
 	"github.com/optipilot/controller/internal/discovery"
+	"github.com/optipilot/controller/internal/forecaster"
+	"github.com/optipilot/controller/internal/kube"
+	"github.com/optipilot/controller/internal/predictor"
 	"github.com/optipilot/controller/internal/store"
 )
 
@@ -60,12 +64,48 @@ func run(configPath string) error {
 		}
 	}()
 
+	var kubeClient kube.Client
+	kubeClient, err = kube.InitClient(cfg.Kube.KubeconfigPath, slog.Default())
+	if err != nil {
+		slog.Warn("kubernetes client unavailable; running in degraded mode", "error", err)
+	}
+
 	// Initialize service discovery based on configured mode.
-	disc, err := newDiscovery(cfg)
+	disc, err := newDiscovery(cfg, kubeClient)
 	if err != nil {
 		return err
 	}
 	defer disc.Stop()
+
+	act := actuator.New(st, kubeClient, cfg.Scaling, cfg.Kube, slog.Default())
+
+	// Dial the forecaster for predictor RPCs. If client construction fails
+	// (for example, malformed target), keep running collector/purge loops.
+	fcClient, err := forecaster.NewClient(
+		cfg.Forecaster.GrpcAddress,
+		time.Duration(cfg.Forecaster.TimeoutSec)*time.Second,
+		slog.Default(),
+	)
+	var pred *predictor.Predictor
+	if err != nil {
+		slog.Warn("forecaster client unavailable; predictor disabled",
+			"forecaster_grpc", cfg.Forecaster.GrpcAddress,
+			"error", err,
+		)
+	} else {
+		defer func() {
+			if err := fcClient.Close(); err != nil {
+				slog.Error("forecaster client close failed", "error", err)
+			}
+		}()
+		pred = predictor.New(disc, st, fcClient, predictor.PredictorConfig{
+			IntervalSec:     cfg.Predictor.IntervalSec,
+			LookbackMinutes: cfg.Predictor.LookbackMinutes,
+			MinDataPoints:   cfg.Predictor.MinDataPoints,
+			IngestBatchSize: cfg.Predictor.IngestBatchSize,
+		}, slog.Default())
+		pred.SetRecommendationHandler(act)
+	}
 
 	startupFields := []any{
 		"discovery_mode", cfg.Discovery.Mode,
@@ -75,6 +115,9 @@ func run(configPath string) error {
 		"http_port", cfg.Server.HTTPPort,
 		"forecaster_grpc", cfg.Forecaster.GrpcAddress,
 		"collector_interval_sec", cfg.Collector.IntervalSec,
+		"predictor_interval_sec", cfg.Predictor.IntervalSec,
+		"predictor_enabled", pred != nil,
+		"kubernetes_client_enabled", kubeClient != nil,
 		"config_path", configPath,
 	}
 	if cfg.Discovery.Mode == config.DiscoveryModeStatic {
@@ -93,6 +136,9 @@ func run(configPath string) error {
 	defer cancel()
 
 	go coll.Run(rootCtx)
+	if pred != nil {
+		go pred.Run(rootCtx)
+	}
 	go runPurgeLoop(rootCtx, st, cfg.Storage.RetentionHours)
 
 	<-rootCtx.Done()
@@ -106,12 +152,19 @@ func run(configPath string) error {
 	return nil
 }
 
-func newDiscovery(cfg *config.Config) (discovery.ServiceDiscovery, error) {
+func newDiscovery(cfg *config.Config, kubeClient kube.Client) (discovery.ServiceDiscovery, error) {
 	switch cfg.Discovery.Mode {
 	case config.DiscoveryModeStatic:
 		return discovery.NewStaticDiscovery(cfg.Discovery.StaticServices, cfg.Scaling.Mode), nil
 	case config.DiscoveryModeKubernetes:
-		return discovery.NewKubernetesDiscovery(cfg.Discovery.Kubernetes), nil
+		return discovery.NewKubernetesDiscovery(
+			cfg.Discovery.Kubernetes,
+			cfg.Scaling.Mode,
+			cfg.Scaling.DefaultMinReplicas,
+			cfg.Scaling.DefaultMaxReplicas,
+			kubeClient,
+			slog.Default(),
+		), nil
 	default:
 		return nil, fmt.Errorf("unsupported discovery mode: %q", cfg.Discovery.Mode)
 	}
