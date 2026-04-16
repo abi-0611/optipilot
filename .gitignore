@@ -41,6 +41,12 @@ optipilot-forecaster/test_predictions_*.png
 optipilot-forecaster/predictive_vs_reactive_demo_*.png
 optipilot-forecaster/demo_replay_*.csv
 
+# forecaster runtime artifacts
+forecaster/models/
+forecaster/*.db
+forecaster/*.db-wal
+forecaster/*.db-shm
+
 # Go build outputs from services/
 services/api-gateway/api-gateway
 services/order-service/order-service
