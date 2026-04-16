@@ -1,0 +1,51 @@
+prometheus:
+  address: "http://localhost:9090"
+  query_timeout_sec: 10
+
+discovery:
+  mode: "static"                     # "static" or "kubernetes"
+  static_services:
+    - name: "api-gateway"
+      namespace: "default"
+      metrics_port: 8081
+      min_replicas: 2
+      max_replicas: 15
+    - name: "order-service"
+      namespace: "default"
+      metrics_port: 8082
+      min_replicas: 2
+      max_replicas: 15
+    - name: "payment-service"
+      namespace: "default"
+      metrics_port: 8083
+      min_replicas: 2
+      max_replicas: 15
+  kubernetes:
+    namespace: "default"
+    label_selector: "optipilot.io/enabled=true"
+    resync_interval_sec: 30
+
+collector:
+  interval_sec: 15
+  metrics_path: "/metrics"
+
+scaling:
+  mode: "shadow"                     # global default: shadow, recommend, autonomous
+  scale_up_cooldown_sec: 120
+  scale_down_cooldown_sec: 600
+  default_min_replicas: 2
+  default_max_replicas: 15
+  max_change_percent: 50             # rate limit: max 50% replica change per cycle
+  headroom_factor: 0.20
+
+forecaster:
+  grpc_address: "localhost:50051"
+  timeout_sec: 10
+
+server:
+  http_port: 8080
+  websocket_path: "/ws/events"
+
+storage:
+  db_path: "optipilot.db"
+  retention_hours: 24
