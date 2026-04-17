@@ -291,7 +291,7 @@
         killStatus.textContent = `Kill switch: ${killOn ? "enabled" : "disabled"}`;
         updatedStatus.textContent = `Last refresh: ${new Date().toLocaleTimeString()}`;
       } catch (err) {
-        addEvent(`snapshot error: ${err instanceof Error ? err.message : String(err)}`);
+        addEvent(`Failed to load dashboard data: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
 
@@ -304,7 +304,7 @@
         });
         await loadSnapshot();
       } catch (err) {
-        addEvent(`kill-switch error: ${err instanceof Error ? err.message : String(err)}`);
+        addEvent(`Failed to update kill switch: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
 
@@ -334,7 +334,7 @@
             void loadSnapshot();
           }
         } catch (err) {
-          addEvent(`ws parse error: ${err instanceof Error ? err.message : String(err)}`);
+          addEvent(`Failed to parse WebSocket message: ${err instanceof Error ? err.message : String(err)}`);
         }
       };
     }

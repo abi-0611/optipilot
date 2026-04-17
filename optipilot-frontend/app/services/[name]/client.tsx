@@ -179,7 +179,7 @@ export function ServiceClientView({ name }: { name: string }) {
   const [pendingMode, setPendingMode] = useState<OperatingMode | null>(null);
   const [isSavingMode, setIsSavingMode] = useState(false);
   const [isRetraining, setIsRetraining] = useState(false);
-  const [retrainMessage, setRetrainMessage] = useState("");
+  const [feedbackMessage, setFeedbackMessage] = useState("");
   const mode = pendingMode ?? serviceMode;
 
   const trafficSeries = useMemo(() => {
@@ -199,11 +199,15 @@ export function ServiceClientView({ name }: { name: string }) {
   const onModeChange = async (nextMode: OperatingMode) => {
     setPendingMode(nextMode);
     setIsSavingMode(true);
+    setFeedbackMessage("");
     try {
       await setServiceMode(name, nextMode, "service-page");
       await mutateServices();
     } catch (error) {
       console.error("Failed to update service mode", error);
+      setFeedbackMessage(
+        `Failed to update mode: ${error instanceof Error ? error.message : "unknown error"}`,
+      );
     } finally {
       setPendingMode(null);
       setIsSavingMode(false);
@@ -212,13 +216,15 @@ export function ServiceClientView({ name }: { name: string }) {
 
   const onRetrain = async () => {
     setIsRetraining(true);
-    setRetrainMessage("");
+    setFeedbackMessage("");
     try {
       const result = await triggerServiceRetrain(name);
-      setRetrainMessage(result.message);
+      setFeedbackMessage(result.message);
     } catch (error) {
       console.error("Failed to trigger retrain", error);
-      setRetrainMessage("Failed to trigger retrain");
+      setFeedbackMessage(
+        `Failed to trigger retrain: ${error instanceof Error ? error.message : "unknown error"}`,
+      );
     } finally {
       setIsRetraining(false);
     }
@@ -259,9 +265,9 @@ export function ServiceClientView({ name }: { name: string }) {
         </div>
       </header>
 
-      {retrainMessage ? (
+      {feedbackMessage ? (
         <p className="text-sm text-zinc-300 bg-zinc-900 border border-zinc-800 rounded p-3">
-          {retrainMessage}
+          {feedbackMessage}
         </p>
       ) : null}
 
