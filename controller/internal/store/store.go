@@ -40,6 +40,10 @@ type Store interface {
 	// GetServiceDecisions returns the newest `limit` decisions for a
 	// single service (newest first).
 	GetServiceDecisions(ctx context.Context, serviceName string, limit int) ([]models.ScalingDecision, error)
+	// GetScalingDecisionByID fetches one decision by primary key.
+	GetScalingDecisionByID(ctx context.Context, id int64) (*models.ScalingDecision, error)
+	// UpdateScalingDecision updates executed/reason fields for one decision.
+	UpdateScalingDecision(ctx context.Context, id int64, executed bool, reason string) error
 
 	// Model status
 

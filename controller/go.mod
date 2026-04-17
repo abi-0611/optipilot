@@ -3,6 +3,7 @@ module github.com/optipilot/controller
 go 1.25.0
 
 require (
+	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 	github.com/optipilot/proto/gen/go v0.0.0-00010101000000-000000000000
 	google.golang.org/grpc v1.69.4
 	google.golang.org/protobuf v1.36.8

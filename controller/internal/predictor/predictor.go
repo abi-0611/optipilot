@@ -36,7 +36,11 @@ type Predictor struct {
 	// cache is the latest PredictionResponse per service, accessible to
 	// external callers (e.g. a future HTTP API) without blocking the loop.
 	cache   map[string]*forecaster.PredictionResponse
+	history map[string][]forecaster.PredictionResponse
 	cacheMu sync.RWMutex
+
+	historyLimit     int
+	predictionUpdate func(models.ServiceTarget, *forecaster.PredictionResponse)
 
 	logger *slog.Logger
 }
@@ -73,13 +77,22 @@ func New(
 		client:    client,
 		cfg:       cfg,
 		cache:     make(map[string]*forecaster.PredictionResponse),
-		logger:    logger,
+		history:   make(map[string][]forecaster.PredictionResponse),
+		// Keeps enough data for dashboard inspection while staying bounded.
+		historyLimit: 1000,
+		logger:       logger,
 	}
 }
 
 // SetRecommendationHandler wires an optional action handler (actuator).
 func (p *Predictor) SetRecommendationHandler(handler RecommendationHandler) {
 	p.handler = handler
+}
+
+// SetPredictionHook sets an optional callback invoked after each successful
+// prediction retrieval.
+func (p *Predictor) SetPredictionHook(hook func(models.ServiceTarget, *forecaster.PredictionResponse)) {
+	p.predictionUpdate = hook
 }
 
 // Run blocks until ctx is cancelled, ticking every IntervalSec.
@@ -124,6 +137,28 @@ func (p *Predictor) GetAllPredictions() map[string]*forecaster.PredictionRespons
 	out := make(map[string]*forecaster.PredictionResponse, len(p.cache))
 	for k, v := range p.cache {
 		out[k] = v
+	}
+	return out
+}
+
+// GetPredictionHistory returns up to `limit` most recent predictions (newest
+// first) for one service.
+func (p *Predictor) GetPredictionHistory(service string, limit int) []forecaster.PredictionResponse {
+	if limit <= 0 {
+		limit = 100
+	}
+	p.cacheMu.RLock()
+	defer p.cacheMu.RUnlock()
+	h := p.history[service]
+	if len(h) == 0 {
+		return nil
+	}
+	if limit > len(h) {
+		limit = len(h)
+	}
+	out := make([]forecaster.PredictionResponse, 0, limit)
+	for i := len(h) - 1; i >= 0 && len(out) < limit; i-- {
+		out = append(out, h[i])
 	}
 	return out
 }
@@ -283,7 +318,15 @@ func (p *Predictor) predictOne(ctx context.Context, svc models.ServiceTarget) pr
 	// Update in-memory cache.
 	p.cacheMu.Lock()
 	p.cache[svc.Name] = resp
+	p.history[svc.Name] = append(p.history[svc.Name], *resp)
+	if len(p.history[svc.Name]) > p.historyLimit {
+		p.history[svc.Name] = p.history[svc.Name][len(p.history[svc.Name])-p.historyLimit:]
+	}
 	p.cacheMu.Unlock()
+
+	if p.predictionUpdate != nil {
+		p.predictionUpdate(svc, resp)
+	}
 
 	if p.handler != nil {
 		action, reason, err := p.handler.HandlePrediction(ctx, svc, resp)

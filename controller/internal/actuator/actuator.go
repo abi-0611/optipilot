@@ -2,13 +2,16 @@ package actuator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/optipilot/controller/internal/config"
+	"github.com/optipilot/controller/internal/discovery"
 	"github.com/optipilot/controller/internal/forecaster"
 	"github.com/optipilot/controller/internal/kube"
 	"github.com/optipilot/controller/internal/models"
@@ -27,6 +30,12 @@ type Actuator struct {
 	safety *Safety
 	cfg    config.ScalingConfig
 	logger *slog.Logger
+
+	modeMu        sync.RWMutex
+	modeOverrides map[string]string
+
+	targetResolver func(context.Context, string) (models.ServiceTarget, error)
+	decisionHook   func(models.ScalingDecision)
 }
 
 func New(
@@ -40,12 +49,176 @@ func New(
 		logger = slog.Default()
 	}
 	return &Actuator{
-		store:  st,
-		kube:   kubeClient,
-		cfg:    cfg,
-		safety: NewSafety(cfg, kubeCfg, kubeClient, logger),
-		logger: logger.With("component", "actuator"),
+		store:         st,
+		kube:          kubeClient,
+		cfg:           cfg,
+		safety:        NewSafety(cfg, kubeCfg, kubeClient, logger),
+		logger:        logger.With("component", "actuator"),
+		modeOverrides: make(map[string]string),
 	}
+}
+
+func (a *Actuator) SetDecisionHook(hook func(models.ScalingDecision)) {
+	a.decisionHook = hook
+}
+
+func (a *Actuator) SetTargetResolver(resolver func(context.Context, string) (models.ServiceTarget, error)) {
+	a.targetResolver = resolver
+}
+
+func (a *Actuator) SetServiceMode(serviceName, mode string) error {
+	mode = strings.TrimSpace(mode)
+	switch mode {
+	case config.ScalingModeShadow, config.ScalingModeRecommend, config.ScalingModeAutonomous:
+	default:
+		return fmt.Errorf("unsupported mode %q", mode)
+	}
+	serviceName = strings.TrimSpace(serviceName)
+	if serviceName == "" {
+		return errors.New("service name required")
+	}
+	a.modeMu.Lock()
+	a.modeOverrides[serviceName] = mode
+	a.modeMu.Unlock()
+	return nil
+}
+
+func (a *Actuator) GetServiceMode(serviceName string) (string, bool) {
+	serviceName = strings.TrimSpace(serviceName)
+	if serviceName == "" {
+		return "", false
+	}
+	a.modeMu.RLock()
+	defer a.modeMu.RUnlock()
+	mode, ok := a.modeOverrides[serviceName]
+	return mode, ok
+}
+
+func (a *Actuator) GetEffectiveServiceMode(target models.ServiceTarget) string {
+	return a.effectiveMode(target)
+}
+
+func (a *Actuator) SetGlobalKillSwitch(enabled bool) {
+	a.safety.SetGlobalKillSwitch(enabled)
+}
+
+func (a *Actuator) GlobalKillSwitchEnabled() bool {
+	return a.safety.GlobalKillSwitchEnabled()
+}
+
+func (a *Actuator) SetServicePaused(serviceName string, paused bool) {
+	a.safety.SetServicePaused(serviceName, paused)
+}
+
+func (a *Actuator) ServicePaused(serviceName string) bool {
+	return a.safety.ServicePaused(serviceName)
+}
+
+func (a *Actuator) RunWatcher(ctx context.Context, disc discovery.ServiceDiscovery) {
+	ch, err := disc.Watch(ctx)
+	if err != nil {
+		a.logger.Warn("actuator watcher unavailable", "error", err)
+		return
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case evt, ok := <-ch:
+			if !ok {
+				return
+			}
+			a.logger.Info("actuator observed discovery event",
+				"type", evt.Type.String(),
+				"service", evt.Service.Name,
+				"namespace", evt.Service.Namespace,
+			)
+		}
+	}
+}
+
+func (a *Actuator) ApproveRecommendation(ctx context.Context, id int64) (*models.ScalingDecision, error) {
+	decision, err := a.store.GetScalingDecisionByID(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("load recommendation id=%d: %w", id, err)
+	}
+	if decision == nil {
+		return nil, fmt.Errorf("recommendation id=%d not found", id)
+	}
+	if decision.Executed {
+		return decision, nil
+	}
+	if a.kube == nil {
+		return nil, errors.New("kubernetes client unavailable")
+	}
+	if a.targetResolver == nil {
+		return nil, errors.New("target resolver unavailable")
+	}
+
+	target, err := a.targetResolver(ctx, decision.ServiceName)
+	if err != nil {
+		return nil, fmt.Errorf("resolve service target %q: %w", decision.ServiceName, err)
+	}
+	currentReplicas, _, err := a.currentState(ctx, target)
+	if err != nil {
+		return nil, err
+	}
+	safetyDecision, err := a.safety.Evaluate(ctx, target, currentReplicas, decision.NewReplicas)
+	if err != nil {
+		return nil, fmt.Errorf("safety evaluate: %w", err)
+	}
+	if !safetyDecision.Allowed {
+		reason := "approval blocked: " + safetyDecision.Reason
+		if err := a.store.UpdateScalingDecision(ctx, decision.ID, false, reason); err != nil {
+			return nil, fmt.Errorf("persist blocked recommendation id=%d: %w", decision.ID, err)
+		}
+		decision.OldReplicas = currentReplicas
+		decision.NewReplicas = safetyDecision.TargetReplicas
+		decision.Reason = reason
+		decision.Executed = false
+		return decision, nil
+	}
+	if err := a.kube.PatchReplicas(ctx, target.Namespace, target.Name, safetyDecision.TargetReplicas); err != nil {
+		reason := "approval failed: patch replicas failed"
+		if updateErr := a.store.UpdateScalingDecision(ctx, decision.ID, false, reason); updateErr != nil {
+			return nil, fmt.Errorf("patch failed (%v) and update failed: %w", err, updateErr)
+		}
+		decision.OldReplicas = currentReplicas
+		decision.NewReplicas = safetyDecision.TargetReplicas
+		decision.Reason = reason
+		decision.Executed = false
+		return decision, nil
+	}
+	a.safety.MarkScaled(target, currentReplicas, safetyDecision.TargetReplicas)
+	reason := "approved and executed"
+	if err := a.store.UpdateScalingDecision(ctx, decision.ID, true, reason); err != nil {
+		return nil, fmt.Errorf("persist approved recommendation id=%d: %w", decision.ID, err)
+	}
+	decision.OldReplicas = currentReplicas
+	decision.NewReplicas = safetyDecision.TargetReplicas
+	decision.Reason = reason
+	decision.Executed = true
+	if a.decisionHook != nil {
+		a.decisionHook(*decision)
+	}
+	return decision, nil
+}
+
+func (a *Actuator) RejectRecommendation(ctx context.Context, id int64) (*models.ScalingDecision, error) {
+	decision, err := a.store.GetScalingDecisionByID(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("load recommendation id=%d: %w", id, err)
+	}
+	if decision == nil {
+		return nil, fmt.Errorf("recommendation id=%d not found", id)
+	}
+	reason := "rejected by operator"
+	if err := a.store.UpdateScalingDecision(ctx, decision.ID, false, reason); err != nil {
+		return nil, fmt.Errorf("persist rejected recommendation id=%d: %w", decision.ID, err)
+	}
+	decision.Reason = reason
+	decision.Executed = false
+	return decision, nil
 }
 
 func (a *Actuator) HandlePrediction(
@@ -135,6 +308,9 @@ func (a *Actuator) HandlePrediction(
 }
 
 func (a *Actuator) effectiveMode(target models.ServiceTarget) string {
+	if mode, ok := a.GetServiceMode(target.Name); ok {
+		return mode
+	}
 	mode := strings.TrimSpace(target.ScalingMode)
 	if mode == "" {
 		mode = a.cfg.Mode
@@ -315,6 +491,9 @@ func (a *Actuator) persistDecision(
 	}
 	if err := a.store.SaveScalingDecision(ctx, decision); err != nil {
 		return "", "", fmt.Errorf("save scaling decision for %s: %w", target.Name, err)
+	}
+	if a.decisionHook != nil {
+		a.decisionHook(*decision)
 	}
 	return action, reason, nil
 }

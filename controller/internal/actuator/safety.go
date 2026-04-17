@@ -42,11 +42,13 @@ type Safety struct {
 	kube    kube.Client
 	logger  *slog.Logger
 
-	mu                sync.Mutex
-	lastScaleUpAt     map[string]time.Time
-	lastScaleDownAt   map[string]time.Time
-	conservativeUntil map[string]time.Time
-	killSwitch        killSwitchSnapshot
+	mu                   sync.Mutex
+	lastScaleUpAt        map[string]time.Time
+	lastScaleDownAt      map[string]time.Time
+	conservativeUntil    map[string]time.Time
+	killSwitch           killSwitchSnapshot
+	runtimeGlobalKill    bool
+	runtimeServicePaused map[string]bool
 }
 
 func NewSafety(cfg config.ScalingConfig, kubeCfg config.KubeConfig, kubeClient kube.Client, logger *slog.Logger) *Safety {
@@ -54,17 +56,55 @@ func NewSafety(cfg config.ScalingConfig, kubeCfg config.KubeConfig, kubeClient k
 		logger = slog.Default()
 	}
 	return &Safety{
-		cfg:               cfg,
-		kubeCfg:           kubeCfg,
-		kube:              kubeClient,
-		logger:            logger.With("component", "safety"),
-		lastScaleUpAt:     make(map[string]time.Time),
-		lastScaleDownAt:   make(map[string]time.Time),
-		conservativeUntil: make(map[string]time.Time),
+		cfg:                  cfg,
+		kubeCfg:              kubeCfg,
+		kube:                 kubeClient,
+		logger:               logger.With("component", "safety"),
+		lastScaleUpAt:        make(map[string]time.Time),
+		lastScaleDownAt:      make(map[string]time.Time),
+		conservativeUntil:    make(map[string]time.Time),
+		runtimeGlobalKill:    cfg.GlobalKillSwitch,
+		runtimeServicePaused: make(map[string]bool),
 		killSwitch: killSwitchSnapshot{
 			services: make(map[string]bool),
 		},
 	}
+}
+
+func (s *Safety) SetGlobalKillSwitch(enabled bool) {
+	s.mu.Lock()
+	s.runtimeGlobalKill = enabled
+	s.mu.Unlock()
+}
+
+func (s *Safety) GlobalKillSwitchEnabled() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.runtimeGlobalKill
+}
+
+func (s *Safety) SetServicePaused(serviceKey string, paused bool) {
+	serviceKey = strings.TrimSpace(serviceKey)
+	if serviceKey == "" {
+		return
+	}
+	s.mu.Lock()
+	if paused {
+		s.runtimeServicePaused[serviceKey] = true
+	} else {
+		delete(s.runtimeServicePaused, serviceKey)
+	}
+	s.mu.Unlock()
+}
+
+func (s *Safety) ServicePaused(serviceKey string) bool {
+	serviceKey = strings.TrimSpace(serviceKey)
+	if serviceKey == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.runtimeServicePaused[serviceKey]
 }
 
 func (s *Safety) Evaluate(
@@ -240,8 +280,11 @@ func (s *Safety) cooldownBlocked(
 }
 
 func (s *Safety) killSwitchState(ctx context.Context, target models.ServiceTarget) (global bool, service bool, err error) {
-	if s.cfg.GlobalKillSwitch {
+	if s.GlobalKillSwitchEnabled() {
 		return true, false, nil
+	}
+	if s.ServicePaused(target.Name) || s.ServicePaused(fullServiceName(target)) {
+		return false, true, nil
 	}
 	if v, ok := parseBool(target.Annotations[annoKillSwitch]); ok && v {
 		return false, true, nil

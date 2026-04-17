@@ -29,7 +29,8 @@ type Config struct {
 	Kube       KubeConfig       `yaml:"kube"`
 	Forecaster ForecasterConfig `yaml:"forecaster"`
 	Predictor  PredictorConfig  `yaml:"predictor"`
-	Server     ServerConfig     `yaml:"server"`
+	Dashboard  DashboardConfig  `yaml:"dashboard"`
+	Server     DashboardConfig  `yaml:"server"` // legacy key; merged into dashboard defaults
 	Storage    StorageConfig    `yaml:"storage"`
 }
 
@@ -114,9 +115,11 @@ type PredictorConfig struct {
 	IngestBatchSize int `yaml:"ingest_batch_size"`
 }
 
-type ServerConfig struct {
+type DashboardConfig struct {
 	HTTPPort      int    `yaml:"http_port"`
 	WebsocketPath string `yaml:"websocket_path"`
+	CORSOrigin    string `yaml:"cors_origin"`
+	StaticDir     string `yaml:"static_dir"`
 }
 
 type StorageConfig struct {
@@ -219,7 +222,23 @@ func applyEnvOverrides(c *Config) error {
 		if err != nil {
 			return fmt.Errorf("OPTIPILOT_SERVER_HTTP_PORT %q: %w", v, err)
 		}
-		c.Server.HTTPPort = p
+		c.Dashboard.HTTPPort = p
+	}
+	if v := os.Getenv("OPTIPILOT_DASHBOARD_HTTP_PORT"); v != "" {
+		p, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("OPTIPILOT_DASHBOARD_HTTP_PORT %q: %w", v, err)
+		}
+		c.Dashboard.HTTPPort = p
+	}
+	if v := os.Getenv("OPTIPILOT_DASHBOARD_WEBSOCKET_PATH"); v != "" {
+		c.Dashboard.WebsocketPath = v
+	}
+	if v := os.Getenv("OPTIPILOT_DASHBOARD_CORS_ORIGIN"); v != "" {
+		c.Dashboard.CORSOrigin = v
+	}
+	if v := os.Getenv("OPTIPILOT_DASHBOARD_STATIC_DIR"); v != "" {
+		c.Dashboard.StaticDir = v
 	}
 	return nil
 }
@@ -291,11 +310,33 @@ func applyDefaults(c *Config) {
 	if c.Predictor.IngestBatchSize <= 0 {
 		c.Predictor.IngestBatchSize = 500
 	}
-	if c.Server.HTTPPort == 0 {
-		c.Server.HTTPPort = 8080
+	if c.Dashboard.HTTPPort == 0 {
+		if c.Server.HTTPPort > 0 {
+			c.Dashboard.HTTPPort = c.Server.HTTPPort
+		} else {
+			c.Dashboard.HTTPPort = 8080
+		}
 	}
-	if c.Server.WebsocketPath == "" {
-		c.Server.WebsocketPath = "/ws/events"
+	if c.Dashboard.WebsocketPath == "" {
+		if c.Server.WebsocketPath != "" {
+			c.Dashboard.WebsocketPath = c.Server.WebsocketPath
+		} else {
+			c.Dashboard.WebsocketPath = "/ws/events"
+		}
+	}
+	if c.Dashboard.CORSOrigin == "" {
+		if c.Server.CORSOrigin != "" {
+			c.Dashboard.CORSOrigin = c.Server.CORSOrigin
+		} else {
+			c.Dashboard.CORSOrigin = "*"
+		}
+	}
+	if c.Dashboard.StaticDir == "" {
+		if c.Server.StaticDir != "" {
+			c.Dashboard.StaticDir = c.Server.StaticDir
+		} else {
+			c.Dashboard.StaticDir = "dashboard"
+		}
 	}
 	if c.Storage.DBPath == "" {
 		c.Storage.DBPath = "optipilot.db"
@@ -366,8 +407,8 @@ func validate(c *Config) error {
 	if c.Forecaster.GrpcAddress == "" {
 		return fmt.Errorf("forecaster.grpc_address is required")
 	}
-	if !strings.HasPrefix(c.Server.WebsocketPath, "/") {
-		return fmt.Errorf("server.websocket_path must start with '/', got %q", c.Server.WebsocketPath)
+	if !strings.HasPrefix(c.Dashboard.WebsocketPath, "/") {
+		return fmt.Errorf("dashboard.websocket_path must start with '/', got %q", c.Dashboard.WebsocketPath)
 	}
 
 	return nil

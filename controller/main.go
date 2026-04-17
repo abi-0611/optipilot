@@ -20,9 +20,11 @@ import (
 	"github.com/optipilot/controller/internal/actuator"
 	"github.com/optipilot/controller/internal/collector"
 	"github.com/optipilot/controller/internal/config"
+	"github.com/optipilot/controller/internal/dashboard"
 	"github.com/optipilot/controller/internal/discovery"
 	"github.com/optipilot/controller/internal/forecaster"
 	"github.com/optipilot/controller/internal/kube"
+	"github.com/optipilot/controller/internal/models"
 	"github.com/optipilot/controller/internal/predictor"
 	"github.com/optipilot/controller/internal/store"
 )
@@ -78,15 +80,16 @@ func run(configPath string) error {
 	defer disc.Stop()
 
 	act := actuator.New(st, kubeClient, cfg.Scaling, cfg.Kube, slog.Default())
+	events := dashboard.NewEventBus(slog.Default())
 
 	// Dial the forecaster for predictor RPCs. If client construction fails
 	// (for example, malformed target), keep running collector/purge loops.
+	var pred *predictor.Predictor
 	fcClient, err := forecaster.NewClient(
 		cfg.Forecaster.GrpcAddress,
 		time.Duration(cfg.Forecaster.TimeoutSec)*time.Second,
 		slog.Default(),
 	)
-	var pred *predictor.Predictor
 	if err != nil {
 		slog.Warn("forecaster client unavailable; predictor disabled",
 			"forecaster_grpc", cfg.Forecaster.GrpcAddress,
@@ -105,14 +108,50 @@ func run(configPath string) error {
 			IngestBatchSize: cfg.Predictor.IngestBatchSize,
 		}, slog.Default())
 		pred.SetRecommendationHandler(act)
+		pred.SetPredictionHook(func(target models.ServiceTarget, pred *forecaster.PredictionResponse) {
+			events.Publish(dashboard.NewEvent(dashboard.EventTypePrediction, dashboard.PredictionData{
+				Service:      pred.ServiceName,
+				P50:          pred.RpsP50,
+				P90:          pred.RpsP90,
+				Replicas:     pred.RecommendedReplicas,
+				Mode:         act.GetEffectiveServiceMode(target),
+				Confidence:   pred.ConfidenceScore,
+				ModelVersion: pred.ModelVersion,
+			}))
+		})
 	}
+
+	act.SetTargetResolver(func(ctx context.Context, serviceName string) (models.ServiceTarget, error) {
+		services, err := disc.Discover(ctx)
+		if err != nil {
+			return models.ServiceTarget{}, err
+		}
+		for _, svc := range services {
+			if svc.Name == serviceName {
+				return svc, nil
+			}
+		}
+		return models.ServiceTarget{}, fmt.Errorf("service %q not found", serviceName)
+	})
+	act.SetDecisionHook(func(d models.ScalingDecision) {
+		events.Publish(dashboard.NewEvent(dashboard.EventTypeScalingDecision, dashboard.ScalingDecisionData{
+			Service:     d.ServiceName,
+			OldReplicas: d.OldReplicas,
+			NewReplicas: d.NewReplicas,
+			Reason:      d.Reason,
+			Executed:    d.Executed,
+			Timestamp:   d.CreatedAt.UTC(),
+		}))
+	})
 
 	startupFields := []any{
 		"discovery_mode", cfg.Discovery.Mode,
 		"scaling_mode", cfg.Scaling.Mode,
 		"prometheus_address", cfg.Prometheus.Address,
 		"db_path", cfg.Storage.DBPath,
-		"http_port", cfg.Server.HTTPPort,
+		"http_port", cfg.Dashboard.HTTPPort,
+		"websocket_path", cfg.Dashboard.WebsocketPath,
+		"cors_origin", cfg.Dashboard.CORSOrigin,
 		"forecaster_grpc", cfg.Forecaster.GrpcAddress,
 		"collector_interval_sec", cfg.Collector.IntervalSec,
 		"predictor_interval_sec", cfg.Predictor.IntervalSec,
@@ -130,6 +169,37 @@ func run(configPath string) error {
 		PrometheusAddr:  cfg.Prometheus.Address,
 		QueryTimeoutSec: cfg.Prometheus.QueryTimeoutSec,
 	}, slog.Default())
+	coll.SetMetricsHook(func(m models.ServiceMetrics) {
+		events.Publish(dashboard.NewEvent(dashboard.EventTypeMetricsUpdate, dashboard.MetricsUpdateData{
+			Service:   m.ServiceName,
+			RPS:       m.RPS,
+			CPU:       m.CPUPercent,
+			Memory:    m.MemoryMB,
+			Latency:   m.AvgLatencyMs,
+			Timestamp: m.CollectedAt.UTC(),
+		}))
+	})
+
+	dashServer, err := dashboard.NewServer(
+		cfg.Dashboard,
+		cfg.Prometheus.Address,
+		st,
+		disc,
+		func() dashboard.PredictionReader {
+			if pred == nil {
+				return nil
+			}
+			return pred
+		}(),
+		act,
+		fcClient,
+		kubeClient,
+		events,
+		slog.Default(),
+	)
+	if err != nil {
+		return err
+	}
 
 	// rootCtx is cancelled on signal so background goroutines wind down.
 	rootCtx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -139,10 +209,18 @@ func run(configPath string) error {
 	if pred != nil {
 		go pred.Run(rootCtx)
 	}
+	go act.RunWatcher(rootCtx, disc)
 	go runPurgeLoop(rootCtx, st, cfg.Storage.RetentionHours)
+	go func() {
+		if err := dashServer.Run(rootCtx); err != nil && !errors.Is(err, context.Canceled) {
+			slog.Error("dashboard server failed", "error", err)
+			cancel()
+		}
+	}()
 
 	<-rootCtx.Done()
 	slog.Info("shutting down", "reason", "signal received")
+	events.Close()
 
 	// Give in-flight operations a moment to bail out via context cancellation.
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)

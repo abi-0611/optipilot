@@ -375,6 +375,48 @@ func (s *SQLiteStore) GetServiceDecisions(ctx context.Context, serviceName strin
 	return scanDecisions(rows)
 }
 
+func (s *SQLiteStore) GetScalingDecisionByID(ctx context.Context, id int64) (*models.ScalingDecision, error) {
+	const q = `
+        SELECT id, service_name, old_replicas, new_replicas, scaling_mode,
+               model_version, reason, rps_p50, rps_p90, confidence_score,
+               executed, created_at
+        FROM scaling_decisions
+        WHERE id = ?
+        LIMIT 1`
+	row := s.db.QueryRowContext(ctx, q, id)
+	var d models.ScalingDecision
+	if err := row.Scan(
+		&d.ID, &d.ServiceName, &d.OldReplicas, &d.NewReplicas, &d.ScalingMode,
+		&d.ModelVersion, &d.Reason, &d.RpsP50, &d.RpsP90, &d.ConfidenceScore,
+		&d.Executed, &d.CreatedAt,
+	); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("query decision id=%d: %w", id, err)
+	}
+	return &d, nil
+}
+
+func (s *SQLiteStore) UpdateScalingDecision(ctx context.Context, id int64, executed bool, reason string) error {
+	const q = `
+        UPDATE scaling_decisions
+        SET executed = ?, reason = ?
+        WHERE id = ?`
+	res, err := s.db.ExecContext(ctx, q, executed, reason, id)
+	if err != nil {
+		return fmt.Errorf("update decision id=%d: %w", id, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected id=%d: %w", id, err)
+	}
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 func scanDecisions(rows *sql.Rows) ([]models.ScalingDecision, error) {
 	var out []models.ScalingDecision
 	for rows.Next() {

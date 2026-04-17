@@ -54,9 +54,11 @@ forecaster:
   grpc_address: "localhost:50051"
   timeout_sec: 10
 
-server:
+dashboard:
   http_port: 8080
   websocket_path: "/ws/events"
+  cors_origin: "*"
+  static_dir: "../dashboard"
 
 predictor:
   interval_sec: 60

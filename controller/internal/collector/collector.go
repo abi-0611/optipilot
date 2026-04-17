@@ -43,8 +43,9 @@ type Collector struct {
 	prom      promClient
 	cfg       CollectorConfig
 
-	cache   map[string]*models.ServiceMetrics
-	cacheMu sync.RWMutex
+	cache         map[string]*models.ServiceMetrics
+	cacheMu       sync.RWMutex
+	metricsUpdate func(models.ServiceMetrics)
 
 	logger *slog.Logger
 }
@@ -120,6 +121,12 @@ func (c *Collector) GetMonitoredServices() []string {
 	return out
 }
 
+// SetMetricsHook sets an optional callback invoked after each successful
+// metrics row is persisted and cached.
+func (c *Collector) SetMetricsHook(hook func(models.ServiceMetrics)) {
+	c.metricsUpdate = hook
+}
+
 // ---------------------------------------------------------------------------
 // Core collection logic
 // ---------------------------------------------------------------------------
@@ -188,6 +195,12 @@ func (c *Collector) collectAll(ctx context.Context) {
 			c.cache[m.ServiceName] = &m
 		}
 		c.cacheMu.Unlock()
+
+		if c.metricsUpdate != nil {
+			for i := range batch {
+				c.metricsUpdate(batch[i])
+			}
+		}
 	}
 
 	elapsed := time.Since(start)
