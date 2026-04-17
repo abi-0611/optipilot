@@ -4,12 +4,13 @@ import { GlobalControlPanel } from "@/app/components/dashboard/panels/GlobalCont
 import { LiveTrafficPanel } from "@/app/components/dashboard/panels/LiveTrafficPanel";
 import { RecentAuditLogsPanel } from "@/app/components/dashboard/panels/RecentAuditLogsPanel";
 import { ReplicaStatusPanel } from "@/app/components/dashboard/panels/ReplicaStatusPanel";
-import { useDashboardMockData } from "@/app/hooks/useDashboardMockData";
+import { useDashboardData } from "@/app/hooks/useDashboardData";
 import type { OperatingMode } from "@/app/types/dashboard";
 
 export function DashboardHome() {
   const {
     isLoading,
+    isRealtimeConnected,
     mode,
     modeOptions,
     killSwitchActive,
@@ -19,7 +20,7 @@ export function DashboardHome() {
     lastUpdatedAt,
     setMode,
     toggleKillSwitch,
-  } = useDashboardMockData();
+  } = useDashboardData();
 
   const onModeChange = (value: OperatingMode) => {
     setMode(value);
@@ -38,11 +39,20 @@ export function DashboardHome() {
             </p>
           </div>
           <div className="flex items-center gap-2 text-xs">
-            <span className="rounded bg-emerald-900/60 px-2 py-1 text-emerald-200">
-              WebSocket stream: simulated
+            <span
+              className={`rounded px-2 py-1 ${
+                isRealtimeConnected
+                  ? "bg-emerald-900/60 text-emerald-200"
+                  : "bg-red-900/60 text-red-200"
+              }`}
+            >
+              WebSocket: {isRealtimeConnected ? "connected" : "disconnected"}
             </span>
             <span className="rounded bg-zinc-800 px-2 py-1 text-zinc-300">
-              Last update {new Date(lastUpdatedAt).toLocaleTimeString()}
+              Last update{" "}
+              {lastUpdatedAt > 0
+                ? new Date(lastUpdatedAt).toLocaleTimeString()
+                : "pending"}
             </span>
           </div>
         </header>

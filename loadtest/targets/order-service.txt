@@ -1,0 +1,8 @@
+POST http://localhost:8082/api/v1/orders
+Content-Type: application/json
+
+{"customer_id":"cust-demo","items":[{"product_id":"p-001","quantity":1,"unit_price":249.99}]}
+
+GET http://localhost:8082/api/v1/orders
+GET http://localhost:8082/api/v1/orders/does-not-exist
+

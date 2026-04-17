@@ -1,0 +1,8 @@
+POST http://localhost:8083/api/v1/payments/process
+Content-Type: application/json
+
+{"order_id":"ord-demo","amount":99.99,"currency":"USD","method":"card"}
+
+GET http://localhost:8083/api/v1/payments/does-not-exist/status
+GET http://localhost:8083/health
+

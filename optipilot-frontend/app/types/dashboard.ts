@@ -27,7 +27,7 @@ export interface AuditLogEntry {
   confidence: number;
   forecastP50: number;
   forecastP90: number;
-  mode: OperatingMode;
+  mode: string;
   action: ScalingAction;
   reason: string;
 }

@@ -1,51 +1,65 @@
 "use client";
-import { useEffect, useState, createContext, useContext } from 'react';
 
-const WS_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8080/ws/events';
+import { createContext, useContext, useEffect, useState } from "react";
 
-export const WsContext = createContext<any>(null);
+const WS_URL = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8080/ws/events";
+
+export interface WsEventEnvelope {
+  type: string;
+  data: unknown;
+  timestamp: string;
+}
+
+interface WsContextValue {
+  lastMessage: WsEventEnvelope | null;
+  isConnected: boolean;
+}
+
+const WsContext = createContext<WsContextValue>({
+  lastMessage: null,
+  isConnected: false,
+});
 
 export function WsProvider({ children }: { children: React.ReactNode }) {
-  const [lastMessage, setLastMessage] = useState<any>(null);
+  const [lastMessage, setLastMessage] = useState<WsEventEnvelope | null>(null);
   const [isConnected, setIsConnected] = useState(false);
 
   useEffect(() => {
-    let ws: WebSocket;
-    let reconnectTimeout: NodeJS.Timeout;
+    let ws: WebSocket | null = null;
+    let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
 
     const connect = () => {
       ws = new WebSocket(WS_URL);
 
       ws.onopen = () => {
         setIsConnected(true);
-        console.log('WebSocket connected');
       };
 
       ws.onmessage = (event) => {
         try {
-          const data = JSON.parse(event.data);
+          const data = JSON.parse(event.data) as WsEventEnvelope;
           setLastMessage(data);
-        } catch (err) {
-          console.error('Error parsing WS message', err);
+        } catch (error) {
+          console.error("Error parsing WebSocket message", error);
         }
       };
 
       ws.onclose = () => {
         setIsConnected(false);
-        console.log('WebSocket disconnected, reconnecting...');
-        reconnectTimeout = setTimeout(connect, 3000); // 3s backoff
+        reconnectTimeout = setTimeout(connect, 3000);
       };
 
-      ws.onerror = (err) => {
-        console.error('WebSocket error:', err);
-        ws.close();
+      ws.onerror = () => {
+        ws?.close();
       };
     };
 
     connect();
 
     return () => {
-      clearTimeout(reconnectTimeout);
+      if (reconnectTimeout) {
+        clearTimeout(reconnectTimeout);
+      }
       ws?.close();
     };
   }, []);
@@ -60,3 +74,4 @@ export function WsProvider({ children }: { children: React.ReactNode }) {
 export function useWsEvents() {
   return useContext(WsContext);
 }
+

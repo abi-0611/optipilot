@@ -1,9 +1,11 @@
 """
 OptiPilot gRPC service implementation.
 
-All RPCs except IngestMetrics are stubs that return plausible placeholder
-responses. IngestMetrics is fully implemented: it converts incoming proto
-metrics to internal dataclasses and persists them to SQLite.
+Implements the production v1 behavior:
+- Ingests metrics from controller
+- Serves predictions from promoted models (with deterministic fallback)
+- Exposes model/status and metrics history APIs
+- Triggers retraining on demand
 """
 
 from __future__ import annotations
@@ -200,7 +202,7 @@ class OptiPilotServiceImpl(prediction_pb2_grpc.OptiPilotServiceServicer):
                     predicted_rps_p50=last_rps,
                     predicted_rps_p90=rps_p90,
                     scaling_mode="REACTIVE",
-                    model_version="stub-v0",
+                    model_version="bootstrap-v0",
                     confidence_score=0.0,
                 )
             )
@@ -208,7 +210,7 @@ class OptiPilotServiceImpl(prediction_pb2_grpc.OptiPilotServiceServicer):
                 "GetPrediction",
                 extra={
                     "service": service_name,
-                    "version": "stub-v0",
+                    "version": "bootstrap-v0",
                     "p50": last_rps,
                     "p90": rps_p90,
                     "replicas": max(2, int(rps_p90 / 100) + 1),
@@ -224,8 +226,8 @@ class OptiPilotServiceImpl(prediction_pb2_grpc.OptiPilotServiceServicer):
                 recommended_replicas=max(2, int(rps_p90 / 100) + 1),
                 scaling_mode=prediction_pb2.SCALING_MODE_REACTIVE,
                 confidence_score=0.0,
-                reason=f"stub: {reason}",
-                model_version="stub-v0",
+                reason=f"fallback: {reason}",
+                model_version="bootstrap-v0",
             )
         except Exception as exc:
             self._log.exception("GetPrediction failed", exc_info=exc)
@@ -235,14 +237,36 @@ class OptiPilotServiceImpl(prediction_pb2_grpc.OptiPilotServiceServicer):
         self, request: prediction_pb2.GetModelStatusRequest, context: grpc.aio.ServicerContext
     ) -> prediction_pb2.GetModelStatusResponse:
         try:
-            count = await self._metrics.get_count(request.service_name)
+            service_name = request.service_name
+            count = await self._metrics.get_count(service_name)
+            status = await self._registry.get_status(service_name)
+            if status is None:
+                promoted = await self._registry.get_promoted_model(service_name)
+                if promoted is not None:
+                    status = ModelStatus(
+                        service_name=service_name,
+                        model_version=promoted.version,
+                        current_mape=promoted.validation_mape,
+                        scaling_mode="REACTIVE",
+                        last_trained_at=promoted.created_at,
+                        last_recalibrated_at=promoted.created_at,
+                        training_data_points=count,
+                    )
             self._log.info(
                 "GetModelStatus",
-                extra={"service": request.service_name, "data_points": count},
+                extra={
+                    "service": service_name,
+                    "data_points": count,
+                    "has_status": status is not None,
+                },
             )
+            if status is not None:
+                status.training_data_points = count
+                return _status_to_proto(status)
+
             return prediction_pb2.GetModelStatusResponse(
-                service_name=request.service_name,
-                model_version="stub-v0",
+                service_name=service_name,
+                model_version="",
                 current_mape=0.0,
                 scaling_mode=prediction_pb2.SCALING_MODE_REACTIVE,
                 training_data_points=count,
