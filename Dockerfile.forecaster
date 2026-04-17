@@ -1,0 +1,35 @@
+FROM python:3.11-slim AS builder
+COPY --from=ghcr.io/astral-sh/uv:0.4.17 /uv /bin/uv
+
+WORKDIR /app
+COPY forecaster/pyproject.toml forecaster/uv.lock ./
+
+ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
+
+# Install dependencies using uv into a virtualenv
+RUN uv sync --frozen --no-install-project
+
+COPY forecaster/ .
+COPY gen/python/ optipilot/v1/
+
+RUN uv sync --frozen
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN useradd -m -s /bin/bash optipilot && \
+    mkdir -p /data && \
+    chown -R optipilot:optipilot /app /data
+
+COPY --from=builder --chown=optipilot:optipilot /app/.venv /app/.venv
+COPY --from=builder --chown=optipilot:optipilot /app/src/forecaster /app/src/forecaster
+COPY --from=builder --chown=optipilot:optipilot /app/forecaster.yaml ./forecaster.yaml
+
+USER optipilot
+ENV PATH="/app/.venv/bin:$PATH"
+ENV PYTHONPATH="/app/src"
+
+EXPOSE 50051
+
+ENTRYPOINT ["python", "-m", "forecaster"]
