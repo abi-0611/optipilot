@@ -4,9 +4,348 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>OptiPilot Dashboard</title>
+  <style>
+    :root {
+      color-scheme: dark;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      background: #0b0f14;
+      color: #e5e7eb;
+    }
+    main {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    h1 { margin: 0; font-size: 1.4rem; }
+    .sub { margin-top: 6px; color: #94a3b8; font-size: .9rem; }
+    .status {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin: 14px 0 18px;
+    }
+    .pill {
+      border: 1px solid #334155;
+      border-radius: 999px;
+      padding: 6px 10px;
+      font-size: 12px;
+      background: #111827;
+      color: #cbd5e1;
+    }
+    .pill.ok { border-color: #047857; color: #6ee7b7; }
+    .pill.bad { border-color: #7f1d1d; color: #fca5a5; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 14px;
+    }
+    .card {
+      border: 1px solid #1f2937;
+      background: #111827;
+      border-radius: 10px;
+      padding: 14px;
+    }
+    .services { grid-column: span 7; }
+    .audit { grid-column: span 5; }
+    .events { grid-column: span 12; }
+    @media (max-width: 960px) {
+      .services, .audit, .events { grid-column: span 12; }
+    }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td {
+      text-align: left;
+      padding: 7px 6px;
+      border-bottom: 1px solid #1f2937;
+      vertical-align: top;
+    }
+    th { color: #94a3b8; font-weight: 600; }
+    td code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      background: #0f172a;
+      border: 1px solid #1f2937;
+      padding: 2px 6px;
+      border-radius: 6px;
+    }
+    .muted { color: #94a3b8; }
+    .empty { color: #64748b; font-size: 13px; margin: 8px 0 0; }
+    .feed {
+      max-height: 260px;
+      overflow: auto;
+      margin: 0;
+      padding-left: 18px;
+      font-size: 13px;
+      line-height: 1.35rem;
+      color: #cbd5e1;
+    }
+    .actions {
+      margin-top: 8px;
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    button {
+      background: #1f2937;
+      color: #e2e8f0;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      font-size: 12px;
+      padding: 6px 10px;
+      cursor: pointer;
+    }
+    button:hover { background: #334155; }
+    .warn { color: #fbbf24; font-size: 12px; margin-top: 8px; }
+  </style>
 </head>
 <body>
-  <h1>OptiPilot Dashboard</h1>
-  <p>Static dashboard assets are not present. Set <code>dashboard.static_dir</code> to a built Next.js export.</p>
+  <main>
+    <h1>OptiPilot Dashboard (Embedded)</h1>
+    <div class="sub">REST + WebSocket fallback UI served by the controller binary.</div>
+
+    <div class="status">
+      <span id="wsStatus" class="pill bad">WebSocket: disconnected</span>
+      <span id="forecasterStatus" class="pill">Forecaster: unknown</span>
+      <span id="promStatus" class="pill">Prometheus: unknown</span>
+      <span id="killStatus" class="pill">Kill switch: unknown</span>
+      <span id="updatedStatus" class="pill">Last refresh: pending</span>
+    </div>
+
+    <div class="grid">
+      <section class="card services">
+        <h2>Services</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Namespace</th>
+              <th>Mode</th>
+              <th>Replicas</th>
+              <th>Last RPS</th>
+              <th>Prediction</th>
+            </tr>
+          </thead>
+          <tbody id="servicesBody"></tbody>
+        </table>
+        <p id="servicesEmpty" class="empty" hidden>No discovered services.</p>
+      </section>
+
+      <section class="card audit">
+        <h2>Recent Audit Trail</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Service</th>
+              <th>Change</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="auditBody"></tbody>
+        </table>
+        <p id="auditEmpty" class="empty" hidden>No scaling decisions yet.</p>
+        <div class="actions">
+          <button id="refreshBtn" type="button">Refresh Now</button>
+          <button id="killOnBtn" type="button">Enable Kill Switch</button>
+          <button id="killOffBtn" type="button">Disable Kill Switch</button>
+        </div>
+        <p class="warn">Tip: configure <code>dashboard.static_dir</code> to serve a full built Next.js export.</p>
+      </section>
+
+      <section class="card events">
+        <h2>Live Event Feed</h2>
+        <ol id="eventFeed" class="feed"></ol>
+      </section>
+    </div>
+  </main>
+
+  <script>
+    const servicesBody = document.getElementById("servicesBody");
+    const servicesEmpty = document.getElementById("servicesEmpty");
+    const auditBody = document.getElementById("auditBody");
+    const auditEmpty = document.getElementById("auditEmpty");
+    const eventFeed = document.getElementById("eventFeed");
+    const wsStatus = document.getElementById("wsStatus");
+    const forecasterStatus = document.getElementById("forecasterStatus");
+    const promStatus = document.getElementById("promStatus");
+    const killStatus = document.getElementById("killStatus");
+    const updatedStatus = document.getElementById("updatedStatus");
+
+    const maxEvents = 80;
+    let ws;
+
+    function fmtTime(v) {
+      const d = new Date(v);
+      if (Number.isNaN(d.getTime())) return "n/a";
+      return d.toLocaleTimeString();
+    }
+
+    function readNumber(obj, keys, fallback = 0) {
+      for (const key of keys) {
+        const value = obj && obj[key];
+        if (typeof value === "number" && Number.isFinite(value)) return value;
+        if (typeof value === "string") {
+          const parsed = Number(value);
+          if (Number.isFinite(parsed)) return parsed;
+        }
+      }
+      return fallback;
+    }
+
+    function addEvent(text) {
+      const item = document.createElement("li");
+      item.textContent = text;
+      eventFeed.prepend(item);
+      while (eventFeed.childElementCount > maxEvents) {
+        eventFeed.removeChild(eventFeed.lastElementChild);
+      }
+    }
+
+    async function fetchJSON(path, init) {
+      const resp = await fetch(path, init);
+      if (!resp.ok) {
+        throw new Error(`${resp.status} ${resp.statusText}`);
+      }
+      return resp.json();
+    }
+
+    function setConnectionPill(element, okLabel, badLabel, ok) {
+      element.className = `pill ${ok ? "ok" : "bad"}`;
+      element.textContent = ok ? okLabel : badLabel;
+    }
+
+    function renderServices(services) {
+      servicesBody.innerHTML = "";
+      if (!services || services.length === 0) {
+        servicesEmpty.hidden = false;
+        return;
+      }
+      servicesEmpty.hidden = true;
+      for (const service of services) {
+        const tr = document.createElement("tr");
+        const pred = service.last_prediction || {};
+        const metrics = service.last_metrics || {};
+        const rps = readNumber(metrics, ["RPS", "rps"], 0);
+        tr.innerHTML = `
+          <td><strong>${service.name || "unknown"}</strong></td>
+          <td class="muted">${service.namespace || "-"}</td>
+          <td><code>${service.mode || "shadow"}</code></td>
+          <td>${service.current_replicas ?? 0} (${service.min_replicas ?? 0}-${service.max_replicas ?? 0})</td>
+          <td>${rps.toFixed(1)}</td>
+          <td>p50 ${readNumber(pred, ["rps_p50", "RpsP50"], 0).toFixed(1)} / p90 ${readNumber(pred, ["rps_p90", "RpsP90"], 0).toFixed(1)}</td>
+        `;
+        servicesBody.appendChild(tr);
+      }
+    }
+
+    function renderAudit(entries) {
+      auditBody.innerHTML = "";
+      if (!entries || entries.length === 0) {
+        auditEmpty.hidden = false;
+        return;
+      }
+      auditEmpty.hidden = true;
+      for (const item of entries.slice(0, 15)) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td class="muted">${fmtTime(item.CreatedAt)}</td>
+          <td>${item.ServiceName || "-"}</td>
+          <td>${item.OldReplicas ?? 0} → ${item.NewReplicas ?? 0}</td>
+          <td>${item.Executed ? "executed" : "simulated"}</td>
+        `;
+        auditBody.appendChild(tr);
+      }
+    }
+
+    async function loadSnapshot() {
+      try {
+        const [servicesPayload, auditPayload, statusPayload] = await Promise.all([
+          fetchJSON("/api/services"),
+          fetchJSON("/api/audit?limit=20"),
+          fetchJSON("/api/system/status"),
+        ]);
+
+        const services = servicesPayload.services || [];
+        const audit = auditPayload.audit || [];
+        renderServices(services);
+        renderAudit(audit);
+
+        const forecasterOk = Boolean(statusPayload?.forecaster?.connected);
+        const promOk = Boolean(statusPayload?.prometheus?.connected);
+        const killOn = Boolean(statusPayload?.controller?.global_kill_switch);
+        setConnectionPill(
+          forecasterStatus,
+          "Forecaster: connected",
+          `Forecaster: ${statusPayload?.forecaster?.error || "disconnected"}`,
+          forecasterOk,
+        );
+        setConnectionPill(
+          promStatus,
+          "Prometheus: connected",
+          `Prometheus: ${statusPayload?.prometheus?.error || "disconnected"}`,
+          promOk,
+        );
+        killStatus.className = `pill ${killOn ? "bad" : "ok"}`;
+        killStatus.textContent = `Kill switch: ${killOn ? "enabled" : "disabled"}`;
+        updatedStatus.textContent = `Last refresh: ${new Date().toLocaleTimeString()}`;
+      } catch (err) {
+        addEvent(`snapshot error: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    async function setKillSwitch(enabled) {
+      try {
+        await fetchJSON("/api/kill-switch", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enabled }),
+        });
+        await loadSnapshot();
+      } catch (err) {
+        addEvent(`kill-switch error: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    function connectWebSocket() {
+      if (ws) {
+        try { ws.close(); } catch {}
+      }
+      const proto = window.location.protocol === "https:" ? "wss" : "ws";
+      ws = new WebSocket(`${proto}://${window.location.host}/ws/events`);
+      ws.onopen = () => {
+        setConnectionPill(wsStatus, "WebSocket: connected", "WebSocket: disconnected", true);
+      };
+      ws.onclose = () => {
+        setConnectionPill(wsStatus, "WebSocket: connected", "WebSocket: disconnected", false);
+        setTimeout(connectWebSocket, 3000);
+      };
+      ws.onerror = () => {
+        try { ws.close(); } catch {}
+      };
+      ws.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data);
+          const type = payload?.type || "event";
+          const service = payload?.data?.service || payload?.data?.Service || "-";
+          addEvent(`${fmtTime(payload?.timestamp)} ${type} (${service})`);
+          if (type === "scaling_decision" || type === "mode_change" || type === "alert") {
+            void loadSnapshot();
+          }
+        } catch (err) {
+          addEvent(`ws parse error: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      };
+    }
+
+    document.getElementById("refreshBtn").addEventListener("click", () => { void loadSnapshot(); });
+    document.getElementById("killOnBtn").addEventListener("click", () => { void setKillSwitch(true); });
+    document.getElementById("killOffBtn").addEventListener("click", () => { void setKillSwitch(false); });
+
+    connectWebSocket();
+    void loadSnapshot();
+    setInterval(() => { void loadSnapshot(); }, 15000);
+  </script>
 </body>
 </html>

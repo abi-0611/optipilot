@@ -1,0 +1,98 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: optipilot-config
+  namespace: optipilot-system
+data:
+  optipilot.yaml: |
+    prometheus:
+      address: "http://kube-prometheus-stack-prometheus.monitoring.svc:9090"
+      query_timeout_sec: 10
+
+    discovery:
+      mode: "kubernetes"
+      static_services: []
+      kubernetes:
+        namespace: "default"
+        label_selector: "optipilot.io/enabled=true"
+        resync_interval_sec: 30
+
+    collector:
+      interval_sec: 15
+      metrics_path: "/metrics"
+
+    scaling:
+      mode: "shadow"
+      scale_up_cooldown_sec: 120
+      scale_down_cooldown_sec: 600
+      default_min_replicas: 2
+      default_max_replicas: 15
+      max_change_percent: 50
+      headroom_factor: 0.20
+      global_kill_switch: false
+      rollback_monitoring_minutes: 5
+      rollback_error_rate_threshold: 0.02
+      rollback_latency_increase_percent: 30
+      conservative_mode_minutes: 30
+
+    kube:
+      kubeconfig_path: ""
+      kill_switch_configmap_namespace: ""
+      kill_switch_configmap_name: ""
+      kill_switch_global_key: "global"
+      kill_switch_service_prefix: "service."
+
+    forecaster:
+      grpc_address: "optipilot-forecaster:50051"
+      timeout_sec: 10
+
+    dashboard:
+      http_port: 8080
+      websocket_path: "/ws/events"
+      cors_origin: "*"
+      static_dir: ""
+
+    predictor:
+      interval_sec: 60
+      lookback_minutes: 30
+      min_data_points: 10
+      ingest_batch_size: 500
+
+    storage:
+      db_path: "/data/optipilot.db"
+      retention_hours: 24
+
+  forecaster.yaml: |
+    server:
+      host: "0.0.0.0"
+      port: 50051
+      max_workers: 10
+
+    storage:
+      registry_db: "/data/forecaster_registry.db"
+      metrics_db: "/data/forecaster_metrics.db"
+      retention_days: 90
+
+    training:
+      min_data_points: 1440
+      holdout_percent: 20
+      full_retrain_interval_hours: 24
+      incremental_retrain_interval_min: 10
+      recalibration_interval_min: 5
+      acceptance_mape_threshold: 0.30
+      models_dir: "/data/models"
+      promotion_tolerance: 0.05
+
+    inference:
+      forecast_horizons_min: [5, 15]
+      default_capacity_per_replica: 100
+      default_headroom_factor: 0.20
+
+    drift:
+      rolling_window_hours: 3
+      conservative_mape_threshold: 0.20
+      reactive_mape_threshold: 0.30
+
+    logging:
+      level: "INFO"
+      format: "json"
