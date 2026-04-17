@@ -1,0 +1,22 @@
+prometheus:
+  prometheusSpec:
+    resources:
+      requests:
+        memory: "512Mi"
+      limits:
+        memory: "512Mi"
+    retention: "2d"
+    podMonitorSelectorNilUsesHelmValues: false
+    serviceMonitorSelectorNilUsesHelmValues: false
+  service:
+    type: ClusterIP
+
+# Enable prometheus to scrape pods via annotation automatically
+prometheus-node-exporter:
+  enabled: false
+
+grafana:
+  enabled: false
+
+alertmanager:
+  enabled: false
