@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "optipilot.fullname" . }}-controller
+  namespace: {{ include "optipilot.namespace" . }}
+  labels:
+    {{- include "optipilot.labels" . | nindent 4 }}
+    app.kubernetes.io/component: controller
+spec:
+  replicas: {{ .Values.controller.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "optipilot.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: controller
+  template:
+    metadata:
+      labels:
+        {{- include "optipilot.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: controller
+    spec:
+      serviceAccountName: {{ include "optipilot.serviceAccountName" . }}
+      containers:
+        - name: controller
+          image: "{{ .Values.controller.image.repository }}:{{ .Values.controller.image.tag }}"
+          imagePullPolicy: {{ .Values.controller.image.pullPolicy }}
+          args: ["-config", "/app/optipilot.yaml"]
+          ports:
+            - name: http
+              containerPort: {{ .Values.dashboard.service.port }}
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /api/system/status
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/system/status
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.controller.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /app/optipilot.yaml
+              subPath: optipilot.yaml
+              readOnly: true
+            - name: controller-data
+              mountPath: /data
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "optipilot.fullname" . }}-config
+        - name: controller-data
+          persistentVolumeClaim:
+            claimName: {{ include "optipilot.fullname" . }}-controller
+

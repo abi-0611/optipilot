@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "optipilot.fullname" . }}-controller
+  namespace: {{ include "optipilot.namespace" . }}
+  labels:
+    {{- include "optipilot.labels" . | nindent 4 }}
+    app.kubernetes.io/component: controller
+spec:
+  accessModes:
+    - {{ .Values.storage.controller.accessMode }}
+  resources:
+    requests:
+      storage: {{ .Values.storage.controller.size }}
+

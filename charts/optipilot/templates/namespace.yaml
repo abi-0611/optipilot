@@ -1,0 +1,9 @@
+{{- if .Values.createNamespace }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ include "optipilot.namespace" . }}
+  labels:
+    {{- include "optipilot.labels" . | nindent 4 }}
+{{- end }}
+

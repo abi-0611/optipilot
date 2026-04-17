@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "optipilot.fullname" . }}-forecaster
+  namespace: {{ include "optipilot.namespace" . }}
+  labels:
+    {{- include "optipilot.labels" . | nindent 4 }}
+    app.kubernetes.io/component: forecaster
+spec:
+  replicas: {{ .Values.forecaster.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "optipilot.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: forecaster
+  template:
+    metadata:
+      labels:
+        {{- include "optipilot.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: forecaster
+    spec:
+      serviceAccountName: {{ include "optipilot.serviceAccountName" . }}
+      containers:
+        - name: forecaster
+          image: "{{ .Values.forecaster.image.repository }}:{{ .Values.forecaster.image.tag }}"
+          imagePullPolicy: {{ .Values.forecaster.image.pullPolicy }}
+          ports:
+            - name: grpc
+              containerPort: {{ .Values.service.forecaster.port }}
+              protocol: TCP
+          readinessProbe:
+            tcpSocket:
+              port: grpc
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: grpc
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.forecaster.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /app/forecaster.yaml
+              subPath: forecaster.yaml
+              readOnly: true
+            - name: forecaster-data
+              mountPath: /data
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "optipilot.fullname" . }}-config
+        - name: forecaster-data
+          persistentVolumeClaim:
+            claimName: {{ include "optipilot.fullname" . }}-forecaster
+

@@ -1,0 +1,20 @@
+1. Check rollout status:
+   kubectl -n {{ include "optipilot.namespace" . }} get pods
+   kubectl -n {{ include "optipilot.namespace" . }} get deploy,svc,pvc
+
+2. Access the dashboard:
+{{- if .Values.dashboard.enabled }}
+   kubectl -n {{ include "optipilot.namespace" . }} port-forward svc/{{ include "optipilot.fullname" . }}-controller {{ .Values.dashboard.service.port }}:{{ .Values.dashboard.service.port }}
+   Open http://localhost:{{ .Values.dashboard.service.port }}
+{{- else }}
+   Dashboard service is disabled (.Values.dashboard.enabled=false).
+{{- end }}
+
+3. Label your workloads for monitoring:
+   kubectl label deployment/<name> optipilot.io/enabled=true -n <namespace>
+   kubectl annotate deployment/<name> optipilot.io/min-replicas="2" optipilot.io/max-replicas="10" -n <namespace>
+   kubectl annotate deployment/<name> optipilot.io/mode="{{ .Values.scaling.defaultMode }}" -n <namespace>
+
+4. Demo walkthrough:
+   See docs/DEMO.md in the repository for end-to-end validation flow.
+

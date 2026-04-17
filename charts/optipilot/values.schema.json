@@ -1,0 +1,170 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "namespace": { "type": "string", "minLength": 1 },
+    "createNamespace": { "type": "boolean" },
+    "rbac": {
+      "type": "object",
+      "properties": {
+        "create": { "type": "boolean" }
+      }
+    },
+    "serviceAccount": {
+      "type": "object",
+      "properties": {
+        "create": { "type": "boolean" },
+        "name": { "type": "string" }
+      }
+    },
+    "controller": {
+      "type": "object",
+      "properties": {
+        "replicaCount": { "type": "integer", "minimum": 1 },
+        "image": {
+          "type": "object",
+          "properties": {
+            "repository": { "type": "string", "minLength": 1 },
+            "tag": { "type": "string", "minLength": 1 },
+            "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
+          },
+          "required": ["repository", "tag", "pullPolicy"]
+        },
+        "resources": { "type": "object" }
+      },
+      "required": ["image", "resources"]
+    },
+    "forecaster": {
+      "type": "object",
+      "properties": {
+        "replicaCount": { "type": "integer", "minimum": 1 },
+        "image": {
+          "type": "object",
+          "properties": {
+            "repository": { "type": "string", "minLength": 1 },
+            "tag": { "type": "string", "minLength": 1 },
+            "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
+          },
+          "required": ["repository", "tag", "pullPolicy"]
+        },
+        "resources": { "type": "object" },
+        "training": {
+          "type": "object",
+          "properties": {
+            "minDataPoints": { "type": "integer", "minimum": 1 },
+            "fullRetrainIntervalHours": { "type": "integer", "minimum": 1 },
+            "incrementalRetrainIntervalMin": { "type": "integer", "minimum": 1 },
+            "recalibrationIntervalMin": { "type": "integer", "minimum": 1 },
+            "acceptanceMapeThreshold": { "type": "number", "minimum": 0, "maximum": 1 },
+            "promotionTolerance": { "type": "number", "minimum": 0, "maximum": 1 }
+          },
+          "required": [
+            "minDataPoints",
+            "fullRetrainIntervalHours",
+            "incrementalRetrainIntervalMin",
+            "recalibrationIntervalMin"
+          ]
+        }
+      },
+      "required": ["image", "resources", "training"]
+    },
+    "dashboard": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "service": {
+          "type": "object",
+          "properties": {
+            "type": { "type": "string", "enum": ["ClusterIP", "NodePort", "LoadBalancer"] },
+            "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+            "nodePort": {
+              "type": ["integer", "null"],
+              "minimum": 30000,
+              "maximum": 32767
+            }
+          },
+          "required": ["type", "port"]
+        },
+        "websocketPath": { "type": "string", "pattern": "^/" },
+        "corsOrigin": { "type": "string" },
+        "staticDir": { "type": "string" }
+      },
+      "required": ["enabled", "service"]
+    },
+    "prometheus": {
+      "type": "object",
+      "properties": {
+        "address": { "type": "string" },
+        "fallbackAddress": { "type": "string", "minLength": 1 },
+        "queryTimeoutSec": { "type": "integer", "minimum": 1 }
+      },
+      "required": ["fallbackAddress", "queryTimeoutSec"]
+    },
+    "storage": {
+      "type": "object",
+      "properties": {
+        "controller": {
+          "type": "object",
+          "properties": {
+            "size": { "type": "string", "minLength": 1 },
+            "accessMode": { "type": "string", "minLength": 1 }
+          },
+          "required": ["size", "accessMode"]
+        },
+        "forecaster": {
+          "type": "object",
+          "properties": {
+            "size": { "type": "string", "minLength": 1 },
+            "accessMode": { "type": "string", "minLength": 1 }
+          },
+          "required": ["size", "accessMode"]
+        }
+      },
+      "required": ["controller", "forecaster"]
+    },
+    "scaling": {
+      "type": "object",
+      "properties": {
+        "defaultMode": { "type": "string", "enum": ["shadow", "recommend", "autonomous"] },
+        "defaultMinReplicas": { "type": "integer", "minimum": 1 },
+        "defaultMaxReplicas": { "type": "integer", "minimum": 1 },
+        "cooldownScaleUp": { "type": "integer", "minimum": 1 },
+        "cooldownScaleDown": { "type": "integer", "minimum": 1 },
+        "maxChangePercent": { "type": "integer", "minimum": 1, "maximum": 100 }
+      },
+      "required": [
+        "defaultMode",
+        "defaultMinReplicas",
+        "defaultMaxReplicas",
+        "cooldownScaleUp",
+        "cooldownScaleDown"
+      ]
+    },
+    "service": {
+      "type": "object",
+      "properties": {
+        "forecaster": {
+          "type": "object",
+          "properties": {
+            "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+          },
+          "required": ["port"]
+        }
+      },
+      "required": ["forecaster"]
+    }
+  },
+  "required": [
+    "namespace",
+    "rbac",
+    "serviceAccount",
+    "controller",
+    "forecaster",
+    "dashboard",
+    "prometheus",
+    "storage",
+    "scaling",
+    "service"
+  ]
+}
+

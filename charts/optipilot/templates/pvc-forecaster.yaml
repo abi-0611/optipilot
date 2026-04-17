@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "optipilot.fullname" . }}-forecaster
+  namespace: {{ include "optipilot.namespace" . }}
+  labels:
+    {{- include "optipilot.labels" . | nindent 4 }}
+    app.kubernetes.io/component: forecaster
+spec:
+  accessModes:
+    - {{ .Values.storage.forecaster.accessMode }}
+  resources:
+    requests:
+      storage: {{ .Values.storage.forecaster.size }}
+

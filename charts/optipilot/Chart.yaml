@@ -1,0 +1,7 @@
+apiVersion: v2
+name: optipilot
+description: OptiPilot predictive autoscaling controller and forecaster
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+

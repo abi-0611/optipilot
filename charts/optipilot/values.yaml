@@ -1,0 +1,110 @@
+namespace: optipilot-system
+createNamespace: false
+
+rbac:
+  create: true
+
+serviceAccount:
+  create: true
+  name: ""
+
+controller:
+  replicaCount: 1
+  image:
+    repository: ghcr.io/abi-0611/optipilot/controller
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+forecaster:
+  replicaCount: 1
+  image:
+    repository: ghcr.io/abi-0611/optipilot/forecaster
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  training:
+    minDataPoints: 1440
+    fullRetrainIntervalHours: 24
+    incrementalRetrainIntervalMin: 10
+    recalibrationIntervalMin: 5
+    acceptanceMapeThreshold: 0.30
+    promotionTolerance: 0.05
+
+dashboard:
+  enabled: true
+  service:
+    type: ClusterIP
+    port: 8080
+    nodePort: null
+  websocketPath: /ws/events
+  corsOrigin: "*"
+  staticDir: /app/dashboard
+
+prometheus:
+  # Leave empty to use in-cluster kube-prometheus-stack service.
+  address: ""
+  fallbackAddress: "http://kube-prometheus-stack-prometheus.monitoring.svc:9090"
+  queryTimeoutSec: 10
+
+storage:
+  controller:
+    size: 5Gi
+    accessMode: ReadWriteOnce
+  forecaster:
+    size: 10Gi
+    accessMode: ReadWriteOnce
+
+scaling:
+  defaultMode: shadow
+  defaultMinReplicas: 2
+  defaultMaxReplicas: 15
+  cooldownScaleUp: 120
+  cooldownScaleDown: 600
+  maxChangePercent: 50
+  headroomFactor: 0.20
+  globalKillSwitch: false
+  rollbackMonitoringMinutes: 5
+  rollbackErrorRateThreshold: 0.02
+  rollbackLatencyIncreasePercent: 30
+  conservativeModeMinutes: 30
+
+discovery:
+  mode: kubernetes
+  kubernetesNamespace: default
+  labelSelector: optipilot.io/enabled=true
+  resyncIntervalSec: 30
+
+predictor:
+  intervalSec: 60
+  lookbackMinutes: 30
+  minDataPoints: 10
+  ingestBatchSize: 500
+
+kube:
+  kubeconfigPath: ""
+  killSwitchConfigMapNamespace: ""
+  killSwitchConfigMapName: ""
+  killSwitchGlobalKey: global
+  killSwitchServicePrefix: service.
+
+retention:
+  controllerHours: 24
+  forecasterDays: 90
+
+service:
+  forecaster:
+    port: 50051
+

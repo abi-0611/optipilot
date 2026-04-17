@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "optipilot.fullname" . }}-forecaster
+  namespace: {{ include "optipilot.namespace" . }}
+  labels:
+    {{- include "optipilot.labels" . | nindent 4 }}
+    app.kubernetes.io/component: forecaster
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "optipilot.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: forecaster
+  ports:
+    - name: grpc
+      port: {{ .Values.service.forecaster.port }}
+      targetPort: grpc
+      protocol: TCP
+

@@ -1,0 +1,101 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "optipilot.fullname" . }}-config
+  namespace: {{ include "optipilot.namespace" . }}
+  labels:
+    {{- include "optipilot.labels" . | nindent 4 }}
+data:
+  optipilot.yaml: |
+    prometheus:
+      address: {{ include "optipilot.prometheusAddress" . | quote }}
+      query_timeout_sec: {{ .Values.prometheus.queryTimeoutSec }}
+
+    discovery:
+      mode: {{ .Values.discovery.mode | quote }}
+      static_services: []
+      kubernetes:
+        namespace: {{ .Values.discovery.kubernetesNamespace | quote }}
+        label_selector: {{ .Values.discovery.labelSelector | quote }}
+        resync_interval_sec: {{ .Values.discovery.resyncIntervalSec }}
+
+    collector:
+      interval_sec: 15
+      metrics_path: "/metrics"
+
+    scaling:
+      mode: {{ .Values.scaling.defaultMode | quote }}
+      scale_up_cooldown_sec: {{ .Values.scaling.cooldownScaleUp }}
+      scale_down_cooldown_sec: {{ .Values.scaling.cooldownScaleDown }}
+      default_min_replicas: {{ .Values.scaling.defaultMinReplicas }}
+      default_max_replicas: {{ .Values.scaling.defaultMaxReplicas }}
+      max_change_percent: {{ .Values.scaling.maxChangePercent }}
+      headroom_factor: {{ .Values.scaling.headroomFactor }}
+      global_kill_switch: {{ .Values.scaling.globalKillSwitch }}
+      rollback_monitoring_minutes: {{ .Values.scaling.rollbackMonitoringMinutes }}
+      rollback_error_rate_threshold: {{ .Values.scaling.rollbackErrorRateThreshold }}
+      rollback_latency_increase_percent: {{ .Values.scaling.rollbackLatencyIncreasePercent }}
+      conservative_mode_minutes: {{ .Values.scaling.conservativeModeMinutes }}
+
+    kube:
+      kubeconfig_path: {{ .Values.kube.kubeconfigPath | quote }}
+      kill_switch_configmap_namespace: {{ .Values.kube.killSwitchConfigMapNamespace | quote }}
+      kill_switch_configmap_name: {{ .Values.kube.killSwitchConfigMapName | quote }}
+      kill_switch_global_key: {{ .Values.kube.killSwitchGlobalKey | quote }}
+      kill_switch_service_prefix: {{ .Values.kube.killSwitchServicePrefix | quote }}
+
+    forecaster:
+      grpc_address: {{ printf "%s-forecaster:%d" (include "optipilot.fullname" .) (int .Values.service.forecaster.port) | quote }}
+      timeout_sec: 10
+
+    dashboard:
+      http_port: {{ .Values.dashboard.service.port }}
+      websocket_path: {{ .Values.dashboard.websocketPath | quote }}
+      cors_origin: {{ .Values.dashboard.corsOrigin | quote }}
+      static_dir: {{ .Values.dashboard.staticDir | quote }}
+
+    predictor:
+      interval_sec: {{ .Values.predictor.intervalSec }}
+      lookback_minutes: {{ .Values.predictor.lookbackMinutes }}
+      min_data_points: {{ .Values.predictor.minDataPoints }}
+      ingest_batch_size: {{ .Values.predictor.ingestBatchSize }}
+
+    storage:
+      db_path: "/data/optipilot.db"
+      retention_hours: {{ .Values.retention.controllerHours }}
+
+  forecaster.yaml: |
+    server:
+      host: "0.0.0.0"
+      port: {{ .Values.service.forecaster.port }}
+      max_workers: 10
+
+    storage:
+      registry_db: "/data/forecaster_registry.db"
+      metrics_db: "/data/forecaster_metrics.db"
+      retention_days: {{ .Values.retention.forecasterDays }}
+
+    training:
+      min_data_points: {{ .Values.forecaster.training.minDataPoints }}
+      holdout_percent: 20
+      full_retrain_interval_hours: {{ .Values.forecaster.training.fullRetrainIntervalHours }}
+      incremental_retrain_interval_min: {{ .Values.forecaster.training.incrementalRetrainIntervalMin }}
+      recalibration_interval_min: {{ .Values.forecaster.training.recalibrationIntervalMin }}
+      acceptance_mape_threshold: {{ .Values.forecaster.training.acceptanceMapeThreshold }}
+      models_dir: "/data/models"
+      promotion_tolerance: {{ .Values.forecaster.training.promotionTolerance }}
+
+    inference:
+      forecast_horizons_min: [5, 15]
+      default_capacity_per_replica: 100
+      default_headroom_factor: {{ .Values.scaling.headroomFactor }}
+
+    drift:
+      rolling_window_hours: 3
+      conservative_mape_threshold: 0.20
+      reactive_mape_threshold: 0.30
+
+    logging:
+      level: "INFO"
+      format: "json"
+
