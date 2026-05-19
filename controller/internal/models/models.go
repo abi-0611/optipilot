@@ -88,6 +88,11 @@ type ModelStatus struct {
 	LastRecalibratedAt time.Time
 	TrainingDataPoints int64
 	UpdatedAt          time.Time
+
+	// Training status
+	IsTraining      bool
+	TrainingState   string // "idle" | "training" | "failed"
+	TrainingMessage string
 }
 
 // ServiceState is the live, in-memory snapshot for a single service. The

@@ -170,7 +170,8 @@ curl -X POST http://localhost:8080/api/kill-switch \
    - predictions present
    - scaling decisions visible
    - replica counts respond proactively
-8. Verify in cluster:
+8. Verify in cluster:`test-services.yaml` already includes:
+
    - `kubectl get deploy -w` shows replica updates before spike peak.
 9. Verify audit trail:
    - `GET /api/audit` includes full sequence.
@@ -183,4 +184,3 @@ helm uninstall optipilot -n optipilot-system
 kubectl delete -f deploy/manifests/test-services.yaml
 kind delete cluster --name optipilot
 ```
-

@@ -5,6 +5,7 @@ metadata:
   namespace: default
   labels:
     app: api-gateway
+    optipilot.io/enabled: "true"
   annotations:
     optipilot.io/enabled: "true"
     optipilot.io/min-replicas: "2"
@@ -19,6 +20,7 @@ spec:
     metadata:
       labels:
         app: api-gateway
+        optipilot.io/enabled: "true"
       annotations:
         prometheus.io/scrape: "true"
         prometheus.io/port: "8081"
@@ -56,6 +58,7 @@ metadata:
   namespace: default
   labels:
     app: order-service
+    optipilot.io/enabled: "true"
   annotations:
     optipilot.io/enabled: "true"
     optipilot.io/min-replicas: "2"
@@ -70,6 +73,7 @@ spec:
     metadata:
       labels:
         app: order-service
+        optipilot.io/enabled: "true"
       annotations:
         prometheus.io/scrape: "true"
         prometheus.io/port: "8082"
@@ -107,6 +111,7 @@ metadata:
   namespace: default
   labels:
     app: payment-service
+    optipilot.io/enabled: "true"
   annotations:
     optipilot.io/enabled: "true"
     optipilot.io/min-replicas: "2"
@@ -121,6 +126,7 @@ spec:
     metadata:
       labels:
         app: payment-service
+        optipilot.io/enabled: "true"
       annotations:
         prometheus.io/scrape: "true"
         prometheus.io/port: "8083"

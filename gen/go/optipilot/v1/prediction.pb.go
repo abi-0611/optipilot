@@ -287,6 +287,11 @@ type GetModelStatusResponse struct {
 	LastTrainedAt      *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=last_trained_at,json=lastTrainedAt,proto3" json:"last_trained_at,omitempty"`
 	LastRecalibratedAt *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=last_recalibrated_at,json=lastRecalibratedAt,proto3" json:"last_recalibrated_at,omitempty"`
 	TrainingDataPoints int64                  `protobuf:"varint,7,opt,name=training_data_points,json=trainingDataPoints,proto3" json:"training_data_points,omitempty"`
+	IsTraining         bool                   `protobuf:"varint,8,opt,name=is_training,json=isTraining,proto3" json:"is_training,omitempty"`
+	TrainingState      string                 `protobuf:"bytes,9,opt,name=training_state,json=trainingState,proto3" json:"training_state,omitempty"`
+	TrainingMessage    string                 `protobuf:"bytes,10,opt,name=training_message,json=trainingMessage,proto3" json:"training_message,omitempty"`
+	TrainingStartedAt  *timestamppb.Timestamp `protobuf:"bytes,11,opt,name=training_started_at,json=trainingStartedAt,proto3" json:"training_started_at,omitempty"`
+	TrainingUpdatedAt  *timestamppb.Timestamp `protobuf:"bytes,12,opt,name=training_updated_at,json=trainingUpdatedAt,proto3" json:"training_updated_at,omitempty"`
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
@@ -368,6 +373,41 @@ func (x *GetModelStatusResponse) GetTrainingDataPoints() int64 {
 		return x.TrainingDataPoints
 	}
 	return 0
+}
+
+func (x *GetModelStatusResponse) GetIsTraining() bool {
+	if x != nil {
+		return x.IsTraining
+	}
+	return false
+}
+
+func (x *GetModelStatusResponse) GetTrainingState() string {
+	if x != nil {
+		return x.TrainingState
+	}
+	return ""
+}
+
+func (x *GetModelStatusResponse) GetTrainingMessage() string {
+	if x != nil {
+		return x.TrainingMessage
+	}
+	return ""
+}
+
+func (x *GetModelStatusResponse) GetTrainingStartedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.TrainingStartedAt
+	}
+	return nil
+}
+
+func (x *GetModelStatusResponse) GetTrainingUpdatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.TrainingUpdatedAt
+	}
+	return nil
 }
 
 type AllServicesStatusRequest struct {
@@ -890,7 +930,7 @@ const file_optipilot_v1_prediction_proto_rawDesc = "" +
 	"\x06reason\x18\a \x01(\tR\x06reason\x12#\n" +
 	"\rmodel_version\x18\b \x01(\tR\fmodelVersion\":\n" +
 	"\x15GetModelStatusRequest\x12!\n" +
-	"\fservice_name\x18\x01 \x01(\tR\vserviceName\"\x85\x03\n" +
+	"\fservice_name\x18\x01 \x01(\tR\vserviceName\"\x90\x05\n" +
 	"\x16GetModelStatusResponse\x12!\n" +
 	"\fservice_name\x18\x01 \x01(\tR\vserviceName\x12#\n" +
 	"\rmodel_version\x18\x02 \x01(\tR\fmodelVersion\x12!\n" +
@@ -898,7 +938,14 @@ const file_optipilot_v1_prediction_proto_rawDesc = "" +
 	"\fscaling_mode\x18\x04 \x01(\x0e2\x19.optipilot.v1.ScalingModeR\vscalingMode\x12B\n" +
 	"\x0flast_trained_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\rlastTrainedAt\x12L\n" +
 	"\x14last_recalibrated_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\x12lastRecalibratedAt\x120\n" +
-	"\x14training_data_points\x18\a \x01(\x03R\x12trainingDataPoints\"\x1a\n" +
+	"\x14training_data_points\x18\a \x01(\x03R\x12trainingDataPoints\x12\x1f\n" +
+	"\vis_training\x18\b \x01(\bR\n" +
+	"isTraining\x12%\n" +
+	"\x0etraining_state\x18\t \x01(\tR\rtrainingState\x12)\n" +
+	"\x10training_message\x18\n" +
+	" \x01(\tR\x0ftrainingMessage\x12J\n" +
+	"\x13training_started_at\x18\v \x01(\v2\x1a.google.protobuf.TimestampR\x11trainingStartedAt\x12J\n" +
+	"\x13training_updated_at\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\x11trainingUpdatedAt\"\x1a\n" +
 	"\x18AllServicesStatusRequest\"]\n" +
 	"\x19AllServicesStatusResponse\x12@\n" +
 	"\bservices\x18\x01 \x03(\v2$.optipilot.v1.GetModelStatusResponseR\bservices\"\xec\x02\n" +
@@ -982,27 +1029,29 @@ var file_optipilot_v1_prediction_proto_depIdxs = []int32{
 	0,  // 2: optipilot.v1.GetModelStatusResponse.scaling_mode:type_name -> optipilot.v1.ScalingMode
 	14, // 3: optipilot.v1.GetModelStatusResponse.last_trained_at:type_name -> google.protobuf.Timestamp
 	14, // 4: optipilot.v1.GetModelStatusResponse.last_recalibrated_at:type_name -> google.protobuf.Timestamp
-	4,  // 5: optipilot.v1.AllServicesStatusResponse.services:type_name -> optipilot.v1.GetModelStatusResponse
-	14, // 6: optipilot.v1.ServiceMetric.timestamp:type_name -> google.protobuf.Timestamp
-	7,  // 7: optipilot.v1.MetricsHistoryResponse.data_points:type_name -> optipilot.v1.ServiceMetric
-	7,  // 8: optipilot.v1.IngestMetricsRequest.metrics:type_name -> optipilot.v1.ServiceMetric
-	1,  // 9: optipilot.v1.OptiPilotService.GetPrediction:input_type -> optipilot.v1.GetPredictionRequest
-	3,  // 10: optipilot.v1.OptiPilotService.GetModelStatus:input_type -> optipilot.v1.GetModelStatusRequest
-	5,  // 11: optipilot.v1.OptiPilotService.GetAllServicesStatus:input_type -> optipilot.v1.AllServicesStatusRequest
-	8,  // 12: optipilot.v1.OptiPilotService.GetServiceMetricsHistory:input_type -> optipilot.v1.MetricsHistoryRequest
-	10, // 13: optipilot.v1.OptiPilotService.IngestMetrics:input_type -> optipilot.v1.IngestMetricsRequest
-	12, // 14: optipilot.v1.OptiPilotService.TriggerRetrain:input_type -> optipilot.v1.TriggerRetrainRequest
-	2,  // 15: optipilot.v1.OptiPilotService.GetPrediction:output_type -> optipilot.v1.GetPredictionResponse
-	4,  // 16: optipilot.v1.OptiPilotService.GetModelStatus:output_type -> optipilot.v1.GetModelStatusResponse
-	6,  // 17: optipilot.v1.OptiPilotService.GetAllServicesStatus:output_type -> optipilot.v1.AllServicesStatusResponse
-	9,  // 18: optipilot.v1.OptiPilotService.GetServiceMetricsHistory:output_type -> optipilot.v1.MetricsHistoryResponse
-	11, // 19: optipilot.v1.OptiPilotService.IngestMetrics:output_type -> optipilot.v1.IngestMetricsResponse
-	13, // 20: optipilot.v1.OptiPilotService.TriggerRetrain:output_type -> optipilot.v1.TriggerRetrainResponse
-	15, // [15:21] is the sub-list for method output_type
-	9,  // [9:15] is the sub-list for method input_type
-	9,  // [9:9] is the sub-list for extension type_name
-	9,  // [9:9] is the sub-list for extension extendee
-	0,  // [0:9] is the sub-list for field type_name
+	14, // 5: optipilot.v1.GetModelStatusResponse.training_started_at:type_name -> google.protobuf.Timestamp
+	14, // 6: optipilot.v1.GetModelStatusResponse.training_updated_at:type_name -> google.protobuf.Timestamp
+	4,  // 7: optipilot.v1.AllServicesStatusResponse.services:type_name -> optipilot.v1.GetModelStatusResponse
+	14, // 8: optipilot.v1.ServiceMetric.timestamp:type_name -> google.protobuf.Timestamp
+	7,  // 9: optipilot.v1.MetricsHistoryResponse.data_points:type_name -> optipilot.v1.ServiceMetric
+	7,  // 10: optipilot.v1.IngestMetricsRequest.metrics:type_name -> optipilot.v1.ServiceMetric
+	1,  // 11: optipilot.v1.OptiPilotService.GetPrediction:input_type -> optipilot.v1.GetPredictionRequest
+	3,  // 12: optipilot.v1.OptiPilotService.GetModelStatus:input_type -> optipilot.v1.GetModelStatusRequest
+	5,  // 13: optipilot.v1.OptiPilotService.GetAllServicesStatus:input_type -> optipilot.v1.AllServicesStatusRequest
+	8,  // 14: optipilot.v1.OptiPilotService.GetServiceMetricsHistory:input_type -> optipilot.v1.MetricsHistoryRequest
+	10, // 15: optipilot.v1.OptiPilotService.IngestMetrics:input_type -> optipilot.v1.IngestMetricsRequest
+	12, // 16: optipilot.v1.OptiPilotService.TriggerRetrain:input_type -> optipilot.v1.TriggerRetrainRequest
+	2,  // 17: optipilot.v1.OptiPilotService.GetPrediction:output_type -> optipilot.v1.GetPredictionResponse
+	4,  // 18: optipilot.v1.OptiPilotService.GetModelStatus:output_type -> optipilot.v1.GetModelStatusResponse
+	6,  // 19: optipilot.v1.OptiPilotService.GetAllServicesStatus:output_type -> optipilot.v1.AllServicesStatusResponse
+	9,  // 20: optipilot.v1.OptiPilotService.GetServiceMetricsHistory:output_type -> optipilot.v1.MetricsHistoryResponse
+	11, // 21: optipilot.v1.OptiPilotService.IngestMetrics:output_type -> optipilot.v1.IngestMetricsResponse
+	13, // 22: optipilot.v1.OptiPilotService.TriggerRetrain:output_type -> optipilot.v1.TriggerRetrainResponse
+	17, // [17:23] is the sub-list for method output_type
+	11, // [11:17] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_optipilot_v1_prediction_proto_init() }

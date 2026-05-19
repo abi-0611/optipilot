@@ -53,6 +53,20 @@ export interface SystemStatus {
   };
 }
 
+export interface ServiceModelStatus {
+  ServiceName: string;
+  ModelVersion: string;
+  CurrentMAPE: number;
+  ScalingMode: string;
+  LastTrainedAt: string;
+  LastRecalibratedAt: string;
+  TrainingDataPoints: number;
+  UpdatedAt: string;
+  IsTraining: boolean;
+  TrainingState: string;
+  TrainingMessage: string;
+}
+
 const withBase = (path: string) => `${API_URL}${path}`;
 
 async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
@@ -106,6 +120,31 @@ export async function fetchAuditTrail(limit = 200): Promise<ControllerDecision[]
   return payload.audit ?? [];
 }
 
+export async function fetchServiceDecisions(
+  name: string,
+  limit = 100,
+): Promise<ControllerDecision[]> {
+  const payload = await fetchJSON<{ service: string; decisions: ControllerDecision[] }>(
+    withBase(`/api/services/${encodeURIComponent(name)}/decisions?limit=${limit}`),
+  );
+  return payload.decisions ?? [];
+}
+
+export async function fetchServiceModel(
+  name: string,
+): Promise<ServiceModelStatus | null> {
+  try {
+    return await fetchJSON<ServiceModelStatus>(
+      withBase(`/api/services/${encodeURIComponent(name)}/model`),
+    );
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("(404")) {
+      return null;
+    }
+    throw error;
+  }
+}
+
 export async function fetchSystemStatusSnapshot(): Promise<SystemStatus> {
   return fetchJSON<SystemStatus>(withBase("/api/system/status"));
 }
@@ -156,6 +195,21 @@ export async function triggerServiceRetrain(
   );
 }
 
+export async function simulateServicePrediction(
+  serviceName: string,
+  recentRps: number[],
+  timestamp?: string,
+): Promise<JsonRecord> {
+  return fetchJSON<JsonRecord>(
+    withBase(`/api/services/${encodeURIComponent(serviceName)}/simulate`),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ recent_rps: recentRps, timestamp }),
+    },
+  );
+}
+
 export function useServices() {
   return useSWR(withBase("/api/services"), async (url) => {
     const payload = await fetchJSON<{ services: ServiceSummary[] }>(url);
@@ -185,6 +239,31 @@ export function usePredictions(name: string, limit = 60) {
   );
 }
 
+export function useServiceDecisions(name: string, limit = 100) {
+  return useSWR(
+    withBase(`/api/services/${encodeURIComponent(name)}/decisions?limit=${limit}`),
+    async (url) => {
+      const payload = await fetchJSON<{ service: string; decisions: ControllerDecision[] }>(
+        url,
+      );
+      return payload.decisions ?? [];
+    },
+  );
+}
+
+export function useServiceModel(name: string) {
+  return useSWR(withBase(`/api/services/${encodeURIComponent(name)}/model`), async (url) => {
+    try {
+      return await fetchJSON<ServiceModelStatus>(url);
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("(404")) {
+        return null;
+      }
+      throw error;
+    }
+  });
+}
+
 export function useAuditLog(limit = 200) {
   return useSWR(withBase(`/api/audit?limit=${limit}`), async (url) => {
     const payload = await fetchJSON<{ audit: ControllerDecision[] }>(url);
@@ -195,4 +274,3 @@ export function useAuditLog(limit = 200) {
 export function useSystemStatus() {
   return useSWR(withBase("/api/system/status"), fetchJSON<SystemStatus>);
 }
-

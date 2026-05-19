@@ -361,10 +361,18 @@ export function useDashboardData() {
       );
 
       const action = deriveAction(oldReplicas, newReplicas, executed);
-      setAuditLogs((previous) =>
-        [
+      setAuditLogs((previous) => {
+        const baseId = `event-${eventTimestamp}-${service}`;
+        let nextId = baseId;
+        let duplicateCount = 1;
+        while (previous.some((log) => log.id === nextId)) {
+          nextId = `${baseId}-${duplicateCount}`;
+          duplicateCount += 1;
+        }
+
+        return [
           {
-            id: `event-${eventTimestamp}-${service}`,
+            id: nextId,
             timestamp: eventTimestamp,
             service,
             previousReplicas: oldReplicas,
@@ -377,8 +385,8 @@ export function useDashboardData() {
             reason,
           },
           ...previous,
-        ].slice(0, MAX_AUDIT_LOGS),
-      );
+        ].slice(0, MAX_AUDIT_LOGS);
+      });
       setLastUpdatedAt(eventTimestamp);
       return;
     }
@@ -444,4 +452,3 @@ export function useDashboardData() {
     toggleKillSwitch,
   };
 }
-

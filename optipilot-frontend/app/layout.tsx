@@ -41,6 +41,12 @@ export default function RootLayout({
                 Dashboard
               </Link>
               <Link
+                href="/models"
+                className="block p-2 rounded hover:bg-accent hover:text-accent-foreground transition-colors"
+              >
+                ML Models
+              </Link>
+              <Link
                 href="/audit"
                 className="block p-2 rounded hover:bg-accent hover:text-accent-foreground transition-colors"
               >

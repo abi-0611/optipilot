@@ -23,20 +23,26 @@ GET ${API_GATEWAY_BASE}/api/v1/products/p-001
 GET ${API_GATEWAY_BASE}/api/v1/search?q=electronics
 EOF
 
+cat > "${TMP_TARGET_DIR}/order_body.json" <<EOF
+{"customer_id":"cust-realistic","items":[{"product_id":"p-001","quantity":1,"unit_price":249.99}]}
+EOF
+
 cat > "${TMP_TARGET_DIR}/order-service.txt" <<EOF
 POST ${ORDER_SERVICE_BASE}/api/v1/orders
 Content-Type: application/json
-
-{"customer_id":"cust-realistic","items":[{"product_id":"p-001","quantity":1,"unit_price":249.99}]}
+@${TMP_TARGET_DIR}/order_body.json
 
 GET ${ORDER_SERVICE_BASE}/api/v1/orders
+EOF
+
+cat > "${TMP_TARGET_DIR}/payment_body.json" <<EOF
+{"order_id":"ord-realistic","amount":99.99,"currency":"USD","method":"card"}
 EOF
 
 cat > "${TMP_TARGET_DIR}/payment-service.txt" <<EOF
 POST ${PAYMENT_SERVICE_BASE}/api/v1/payments/process
 Content-Type: application/json
-
-{"order_id":"ord-realistic","amount":99.99,"currency":"USD","method":"card"}
+@${TMP_TARGET_DIR}/payment_body.json
 
 GET ${PAYMENT_SERVICE_BASE}/health
 EOF
@@ -91,4 +97,3 @@ run_attack "payment_cycle_2_pulse" "70" "120s" "${TMP_TARGET_DIR}/payment-servic
 wait
 
 echo "[realistic] complete"
-

@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: optipilot-forecaster
+  namespace: optipilot-system
+  labels:
+    app: optipilot-forecaster
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: optipilot-forecaster
+  template:
+    metadata:
+      labels:
+        app: optipilot-forecaster
+    spec:
+      containers:
+        - name: forecaster
+          image: optipilot-forecaster:latest
+          imagePullPolicy: Never
+          ports:
+            - name: grpc
+              containerPort: 50051
+              protocol: TCP
+          readinessProbe:
+            tcpSocket:
+              port: grpc
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: grpc
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          volumeMounts:
+            - name: config
+              mountPath: /app/forecaster.yaml
+              subPath: forecaster.yaml
+              readOnly: true
+            - name: forecaster-data
+              mountPath: /data
+      volumes:
+        - name: config
+          configMap:
+            name: optipilot-config
+        - name: forecaster-data
+          persistentVolumeClaim:
+            claimName: forecaster-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: optipilot-forecaster
+  namespace: optipilot-system
+spec:
+  type: ClusterIP
+  selector:
+    app: optipilot-forecaster
+  ports:
+    - name: grpc
+      protocol: TCP
+      port: 50051
+      targetPort: grpc

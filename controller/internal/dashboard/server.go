@@ -48,6 +48,7 @@ type ActuatorControl interface {
 }
 
 type ForecasterControl interface {
+	GetPrediction(ctx context.Context, req *forecaster.PredictionRequest) (*forecaster.PredictionResponse, error)
 	GetModelStatus(ctx context.Context, serviceName string) (*models.ModelStatus, error)
 	GetAllServicesStatus(ctx context.Context) ([]models.ModelStatus, error)
 	TriggerRetrain(ctx context.Context, serviceName string) (*forecaster.RetrainResult, error)

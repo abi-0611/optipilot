@@ -50,6 +50,9 @@ func modelStatusFromProto(r *optipilotv1.GetModelStatusResponse) *models.ModelSt
 		LastRecalibratedAt: timestampFromProto(r.GetLastRecalibratedAt()),
 		TrainingDataPoints: r.GetTrainingDataPoints(),
 		UpdatedAt:          time.Now(),
+		IsTraining:         r.GetIsTraining(),
+		TrainingState:      r.GetTrainingState(),
+		TrainingMessage:    r.GetTrainingMessage(),
 	}
 }
 
