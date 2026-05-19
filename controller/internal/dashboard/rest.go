@@ -23,6 +23,7 @@ func (s *Server) registerRESTRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/services/{name}/model", s.handleGetServiceModel)
 	mux.HandleFunc("POST /api/services/{name}/mode", s.handlePostServiceMode)
 	mux.HandleFunc("POST /api/services/{name}/retrain", s.handlePostServiceRetrain)
+	mux.HandleFunc("POST /api/services/{name}/simulate", s.handlePostServiceSimulate)
 	mux.HandleFunc("POST /api/services/{name}/pause", s.handlePostServicePause)
 	mux.HandleFunc("POST /api/kill-switch", s.handlePostKillSwitch)
 	mux.HandleFunc("GET /api/audit", s.handleGetAudit)
@@ -231,6 +232,44 @@ func (s *Server) handlePostServiceRetrain(w http.ResponseWriter, r *http.Request
 		}))
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handlePostServiceSimulate(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if s.forecaster == nil {
+		writeError(w, http.StatusServiceUnavailable, "forecaster unavailable")
+		return
+	}
+
+	var req struct {
+		RecentRPS []float64 `json:"recent_rps"`
+		Timestamp time.Time `json:"timestamp"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if len(req.RecentRPS) == 0 {
+		writeError(w, http.StatusBadRequest, "recent_rps is required")
+		return
+	}
+
+	if req.Timestamp.IsZero() {
+		req.Timestamp = time.Now().UTC()
+	}
+
+	result, err := s.forecaster.GetPrediction(r.Context(), &forecaster.PredictionRequest{
+		ServiceName: name,
+		RecentRPS:   req.RecentRPS,
+		Timestamp:   req.Timestamp,
+	})
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, predictionToPayload(result))
 }
 
 func (s *Server) handlePostServicePause(w http.ResponseWriter, r *http.Request) {

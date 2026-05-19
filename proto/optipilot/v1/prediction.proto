@@ -51,6 +51,11 @@ message GetModelStatusResponse {
   google.protobuf.Timestamp last_trained_at = 5;
   google.protobuf.Timestamp last_recalibrated_at = 6;
   int64 training_data_points = 7;
+  bool is_training = 8;
+  string training_state = 9;
+  string training_message = 10;
+  google.protobuf.Timestamp training_started_at = 11;
+  google.protobuf.Timestamp training_updated_at = 12;
 }
 
 message AllServicesStatusRequest {}

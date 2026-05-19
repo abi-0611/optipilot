@@ -20,6 +20,9 @@ spec:
         - name: controller
           image: optipilot-controller:latest
           imagePullPolicy: Never
+          env:
+            - name: OPTIPILOT_FORECASTER_GRPC_ADDRESS
+              value: "optipilot-forecaster.optipilot-system.svc.cluster.local:50051"
           args:
             - "-config"
             - "/app/optipilot.yaml"

@@ -10,7 +10,7 @@ ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 RUN uv sync --frozen --no-install-project
 
 COPY forecaster/ .
-COPY gen/python/ optipilot/v1/
+COPY gen/python/ /app/gen/python/
 
 RUN uv sync --frozen
 
@@ -28,11 +28,12 @@ RUN useradd -m -s /bin/bash optipilot && \
 
 COPY --from=builder --chown=optipilot:optipilot /app/.venv /app/.venv
 COPY --from=builder --chown=optipilot:optipilot /app/src/forecaster /app/src/forecaster
+COPY --from=builder --chown=optipilot:optipilot /app/gen/python /app/gen/python
 COPY --from=builder --chown=optipilot:optipilot /app/forecaster.yaml ./forecaster.yaml
 
 USER optipilot
 ENV PATH="/app/.venv/bin:$PATH"
-ENV PYTHONPATH="/app/src"
+ENV PYTHONPATH="/app/src:/app/gen/python"
 
 EXPOSE 50051
 

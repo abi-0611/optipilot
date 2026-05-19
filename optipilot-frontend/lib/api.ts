@@ -62,6 +62,9 @@ export interface ServiceModelStatus {
   LastRecalibratedAt: string;
   TrainingDataPoints: number;
   UpdatedAt: string;
+  IsTraining: boolean;
+  TrainingState: string;
+  TrainingMessage: string;
 }
 
 const withBase = (path: string) => `${API_URL}${path}`;
@@ -189,6 +192,21 @@ export async function triggerServiceRetrain(
   return fetchJSON<{ success: boolean; message: string }>(
     withBase(`/api/services/${encodeURIComponent(serviceName)}/retrain`),
     { method: "POST" },
+  );
+}
+
+export async function simulateServicePrediction(
+  serviceName: string,
+  recentRps: number[],
+  timestamp?: string,
+): Promise<JsonRecord> {
+  return fetchJSON<JsonRecord>(
+    withBase(`/api/services/${encodeURIComponent(serviceName)}/simulate`),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ recent_rps: recentRps, timestamp }),
+    },
   );
 }
 

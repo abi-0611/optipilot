@@ -1,0 +1,804 @@
+========================================================================
+FILE: proto/optipilot/v1/prediction.proto
+DESCRIPTION: gRPC API Contract between Controller and Forecaster
+========================================================================
+
+syntax = "proto3";
+
+package optipilot.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/optipilot/proto/gen/go/optipilot/v1;optipilotv1";
+
+enum ScalingMode {
+  SCALING_MODE_UNSPECIFIED = 0;
+  SCALING_MODE_PREDICTIVE = 1;
+  SCALING_MODE_CONSERVATIVE = 2;
+  SCALING_MODE_REACTIVE = 3;
+}
+
+service OptiPilotService {
+  rpc GetPrediction(GetPredictionRequest) returns (GetPredictionResponse);
+  rpc GetModelStatus(GetModelStatusRequest) returns (GetModelStatusResponse);
+  rpc GetAllServicesStatus(AllServicesStatusRequest) returns (AllServicesStatusResponse);
+  rpc GetServiceMetricsHistory(MetricsHistoryRequest) returns (MetricsHistoryResponse);
+  rpc IngestMetrics(IngestMetricsRequest) returns (IngestMetricsResponse);
+  rpc TriggerRetrain(TriggerRetrainRequest) returns (TriggerRetrainResponse);
+}
+
+message GetPredictionRequest {
+  string service_name = 1;
+  repeated double recent_rps = 2;
+  google.protobuf.Timestamp timestamp = 3;
+}
+
+message GetPredictionResponse {
+  string service_name = 1;
+  double rps_p50 = 2;
+  double rps_p90 = 3;
+  int32 recommended_replicas = 4;
+  ScalingMode scaling_mode = 5;
+  double confidence_score = 6;
+  string reason = 7;
+  string model_version = 8;
+}
+
+message GetModelStatusRequest {
+  string service_name = 1;
+}
+
+message GetModelStatusResponse {
+  string service_name = 1;
+  string model_version = 2;
+  double current_mape = 3;
+  ScalingMode scaling_mode = 4;
+  google.protobuf.Timestamp last_trained_at = 5;
+  google.protobuf.Timestamp last_recalibrated_at = 6;
+  int64 training_data_points = 7;
+  bool is_training = 8;
+  string training_state = 9;
+  string training_message = 10;
+  google.protobuf.Timestamp training_started_at = 11;
+  google.protobuf.Timestamp training_updated_at = 12;
+}
+
+message AllServicesStatusRequest {}
+
+message AllServicesStatusResponse {
+  repeated GetModelStatusResponse services = 1;
+}
+
+message ServiceMetric {
+  string service_name = 1;
+  double rps = 2;
+  double avg_latency_ms = 3;
+  double p99_latency_ms = 4;
+  int32 active_connections = 5;
+  double cpu_usage_percent = 6;
+  double memory_usage_mb = 7;
+  double error_rate = 8;
+  google.protobuf.Timestamp timestamp = 9;
+}
+
+message MetricsHistoryRequest {
+  string service_name = 1;
+  int32 minutes = 2;
+}
+
+message MetricsHistoryResponse {
+  string service_name = 1;
+  repeated ServiceMetric data_points = 2;
+}
+
+message IngestMetricsRequest {
+  repeated ServiceMetric metrics = 1;
+}
+
+message IngestMetricsResponse {
+  int32 accepted_count = 1;
+  string message = 2;
+}
+
+message TriggerRetrainRequest {
+  string service_name = 1;
+}
+
+message TriggerRetrainResponse {
+  bool success = 1;
+  string new_model_version = 2;
+  double new_mape = 3;
+  string message = 4;
+}
+
+
+========================================================================
+FILE: controller/main.go
+DESCRIPTION: Controller Entrypoint, Component Wiring & Main Loops
+========================================================================
+
+// OptiPilot controller — single binary entry point.
+//
+// This is the foundation skeleton: it loads configuration, opens the SQLite
+// store, kicks off the periodic metrics-purge loop, and blocks on a shutdown
+// signal. Subsequent layers (collector, gRPC client, Kubernetes client,
+// HTTP/WS server) attach to this skeleton.
+package main
+
+import (
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"log/slog"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"github.com/optipilot/controller/internal/actuator"
+	"github.com/optipilot/controller/internal/collector"
+	"github.com/optipilot/controller/internal/config"
+	"github.com/optipilot/controller/internal/dashboard"
+	"github.com/optipilot/controller/internal/discovery"
+	"github.com/optipilot/controller/internal/forecaster"
+	"github.com/optipilot/controller/internal/kube"
+	"github.com/optipilot/controller/internal/models"
+	"github.com/optipilot/controller/internal/predictor"
+	"github.com/optipilot/controller/internal/store"
+)
+
+const purgeInterval = time.Hour
+
+func main() {
+	// CLI flag wins; otherwise consult OPTIPILOT_CONFIG; otherwise default.
+	defaultConfigPath := os.Getenv("OPTIPILOT_CONFIG")
+	if defaultConfigPath == "" {
+		defaultConfigPath = "optipilot.yaml"
+	}
+	configPath := flag.String("config", defaultConfigPath, "path to OptiPilot YAML config")
+	flag.Parse()
+
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	slog.SetDefault(logger)
+
+	if err := run(*configPath); err != nil {
+		slog.Error("controller exited with error", "error", err)
+		os.Exit(1)
+	}
+}
+
+func run(configPath string) error {
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		return err
+	}
+
+	st, err := store.NewSQLiteStore(cfg.Storage.DBPath)
+	if err != nil {
+		return err
+	}
+	// Always close the store on exit so WAL is checkpointed cleanly.
+	defer func() {
+		if err := st.Close(); err != nil {
+			slog.Error("store close failed", "error", err)
+		}
+	}()
+
+	var kubeClient kube.Client
+	kubeClient, err = kube.InitClient(cfg.Kube.KubeconfigPath, slog.Default())
+	if err != nil {
+		slog.Warn("kubernetes client unavailable; running in degraded mode", "error", err)
+	}
+
+	// Initialize service discovery based on configured mode.
+	disc, err := newDiscovery(cfg, kubeClient)
+	if err != nil {
+		return err
+	}
+	defer disc.Stop()
+
+	act := actuator.New(st, kubeClient, cfg.Scaling, cfg.Kube, slog.Default())
+	events := dashboard.NewEventBus(slog.Default())
+
+	// Dial the forecaster for predictor RPCs. If client construction fails
+	// (for example, malformed target), keep running collector/purge loops.
+	var pred *predictor.Predictor
+	fcClient, err := forecaster.NewClient(
+		cfg.Forecaster.GrpcAddress,
+		time.Duration(cfg.Forecaster.TimeoutSec)*time.Second,
+		slog.Default(),
+	)
+	if err != nil {
+		slog.Warn("forecaster client unavailable; predictor disabled",
+			"forecaster_grpc", cfg.Forecaster.GrpcAddress,
+			"error", err,
+		)
+	} else {
+		defer func() {
+			if err := fcClient.Close(); err != nil {
+				slog.Error("forecaster client close failed", "error", err)
+			}
+		}()
+		pred = predictor.New(disc, st, fcClient, predictor.PredictorConfig{
+			IntervalSec:     cfg.Predictor.IntervalSec,
+			LookbackMinutes: cfg.Predictor.LookbackMinutes,
+			MinDataPoints:   cfg.Predictor.MinDataPoints,
+			IngestBatchSize: cfg.Predictor.IngestBatchSize,
+		}, slog.Default())
+		pred.SetRecommendationHandler(act)
+		pred.SetPredictionHook(func(target models.ServiceTarget, pred *forecaster.PredictionResponse) {
+			events.Publish(dashboard.NewEvent(dashboard.EventTypePrediction, dashboard.PredictionData{
+				Service:      pred.ServiceName,
+				P50:          pred.RpsP50,
+				P90:          pred.RpsP90,
+				Replicas:     pred.RecommendedReplicas,
+				Mode:         act.GetEffectiveServiceMode(target),
+				Confidence:   pred.ConfidenceScore,
+				ModelVersion: pred.ModelVersion,
+			}))
+		})
+	}
+
+	act.SetTargetResolver(func(ctx context.Context, serviceName string) (models.ServiceTarget, error) {
+		services, err := disc.Discover(ctx)
+		if err != nil {
+			return models.ServiceTarget{}, err
+		}
+		for _, svc := range services {
+			if svc.Name == serviceName {
+				return svc, nil
+			}
+		}
+		return models.ServiceTarget{}, fmt.Errorf("service %q not found", serviceName)
+	})
+	act.SetDecisionHook(func(d models.ScalingDecision) {
+		events.Publish(dashboard.NewEvent(dashboard.EventTypeScalingDecision, dashboard.ScalingDecisionData{
+			Service:     d.ServiceName,
+			OldReplicas: d.OldReplicas,
+			NewReplicas: d.NewReplicas,
+			Reason:      d.Reason,
+			Executed:    d.Executed,
+			Timestamp:   d.CreatedAt.UTC(),
+		}))
+	})
+
+	startupFields := []any{
+		"discovery_mode", cfg.Discovery.Mode,
+		"scaling_mode", cfg.Scaling.Mode,
+		"prometheus_address", cfg.Prometheus.Address,
+		"db_path", cfg.Storage.DBPath,
+		"http_port", cfg.Dashboard.HTTPPort,
+		"websocket_path", cfg.Dashboard.WebsocketPath,
+		"cors_origin", cfg.Dashboard.CORSOrigin,
+		"forecaster_grpc", cfg.Forecaster.GrpcAddress,
+		"collector_interval_sec", cfg.Collector.IntervalSec,
+		"predictor_interval_sec", cfg.Predictor.IntervalSec,
+		"predictor_enabled", pred != nil,
+		"kubernetes_client_enabled", kubeClient != nil,
+		"config_path", configPath,
+	}
+	if cfg.Discovery.Mode == config.DiscoveryModeStatic {
+		startupFields = append(startupFields, "static_services", len(cfg.Discovery.StaticServices))
+	}
+	slog.Info("OptiPilot Controller starting", startupFields...)
+
+	coll := collector.NewCollector(disc, st, collector.CollectorConfig{
+		IntervalSec:     cfg.Collector.IntervalSec,
+		PrometheusAddr:  cfg.Prometheus.Address,
+		QueryTimeoutSec: cfg.Prometheus.QueryTimeoutSec,
+	}, slog.Default())
+	coll.SetMetricsHook(func(m models.ServiceMetrics) {
+		events.Publish(dashboard.NewEvent(dashboard.EventTypeMetricsUpdate, dashboard.MetricsUpdateData{
+			Service:   m.ServiceName,
+			RPS:       m.RPS,
+			CPU:       m.CPUPercent,
+			Memory:    m.MemoryMB,
+			Latency:   m.AvgLatencyMs,
+			Timestamp: m.CollectedAt.UTC(),
+		}))
+	})
+
+	dashServer, err := dashboard.NewServer(
+		cfg.Dashboard,
+		cfg.Prometheus.Address,
+		st,
+		disc,
+		func() dashboard.PredictionReader {
+			if pred == nil {
+				return nil
+			}
+			return pred
+		}(),
+		act,
+		fcClient,
+		kubeClient,
+		events,
+		slog.Default(),
+	)
+	if err != nil {
+		return err
+	}
+
+	// rootCtx is cancelled on signal so background goroutines wind down.
+	rootCtx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
+	go coll.Run(rootCtx)
+	if pred != nil {
+		go pred.Run(rootCtx)
+	}
+	go act.RunWatcher(rootCtx, disc)
+	go runPurgeLoop(rootCtx, st, cfg.Storage.RetentionHours)
+	go func() {
+		if err := dashServer.Run(rootCtx); err != nil && !errors.Is(err, context.Canceled) {
+			slog.Error("dashboard server failed", "error", err)
+			cancel()
+		}
+	}()
+
+	<-rootCtx.Done()
+	slog.Info("shutting down", "reason", "signal received")
+	events.Close()
+
+	// Give in-flight operations a moment to bail out via context cancellation.
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+	<-shutdownCtx.Done()
+
+	return nil
+}
+
+func newDiscovery(cfg *config.Config, kubeClient kube.Client) (discovery.ServiceDiscovery, error) {
+	switch cfg.Discovery.Mode {
+	case config.DiscoveryModeStatic:
+		return discovery.NewStaticDiscovery(cfg.Discovery.StaticServices, cfg.Scaling.Mode), nil
+	case config.DiscoveryModeKubernetes:
+		return discovery.NewKubernetesDiscovery(
+			cfg.Discovery.Kubernetes,
+			cfg.Scaling.Mode,
+			cfg.Scaling.DefaultMinReplicas,
+			cfg.Scaling.DefaultMaxReplicas,
+			kubeClient,
+			slog.Default(),
+		), nil
+	default:
+		return nil, fmt.Errorf("unsupported discovery mode: %q", cfg.Discovery.Mode)
+	}
+}
+
+// runPurgeLoop deletes metrics older than retentionHours every purgeInterval.
+// Cancels promptly when ctx is done.
+func runPurgeLoop(ctx context.Context, st store.Store, retentionHours int) {
+	ticker := time.NewTicker(purgeInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := st.PurgeOldMetrics(ctx, retentionHours); err != nil && !errors.Is(err, context.Canceled) {
+				slog.Error("purge old metrics failed", "error", err, "retention_hours", retentionHours)
+				continue
+			}
+			slog.Debug("purged old metrics", "retention_hours", retentionHours)
+		}
+	}
+}
+
+
+========================================================================
+FILE: forecaster/src/forecaster/server/service.py
+DESCRIPTION: Promoted Machine Learning Forecaster gRPC Service 
+========================================================================
+
+"""
+OptiPilot gRPC service implementation.
+
+Implements the production v1 behavior:
+- Ingests metrics from controller
+- Serves predictions from promoted models (with deterministic fallback)
+- Exposes model/status and metrics history APIs
+- Triggers retraining on demand
+"""
+
+from __future__ import annotations
+
+import logging
+from datetime import datetime, timezone
+from typing import Optional, TYPE_CHECKING
+
+import grpc
+from google.protobuf import timestamp_pb2
+
+from forecaster.config import Config
+from forecaster.ml.inference import InferenceEngine
+from forecaster.ml.trainer import InsufficientDataError, Trainer
+from forecaster.models import ModelStatus, ServiceMetric, StoredPrediction
+from optipilot.v1 import prediction_pb2, prediction_pb2_grpc
+from forecaster.storage.metrics import MetricsStore
+from forecaster.storage.registry import ModelRegistry
+
+if TYPE_CHECKING:
+    from forecaster.ml.scheduler import ForecasterScheduler
+
+_SCALING_MODE_TO_PROTO = {
+    "PREDICTIVE":  prediction_pb2.SCALING_MODE_PREDICTIVE,
+    "CONSERVATIVE": prediction_pb2.SCALING_MODE_CONSERVATIVE,
+    "REACTIVE":    prediction_pb2.SCALING_MODE_REACTIVE,
+}
+
+def _ts_from_proto(ts: Optional[timestamp_pb2.Timestamp]) -> datetime:
+    """Convert a protobuf Timestamp to a UTC-aware datetime."""
+    if ts is None or (ts.seconds == 0 and ts.nanos == 0):
+        return datetime.now(tz=timezone.utc)
+    return datetime.fromtimestamp(ts.seconds + ts.nanos / 1e9, tz=timezone.utc)
+
+
+def _ts_to_proto(dt: Optional[datetime]) -> timestamp_pb2.Timestamp:
+    """Convert a datetime to a protobuf Timestamp."""
+    ts = timestamp_pb2.Timestamp()
+    if dt is not None:
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        ts.seconds = int(dt.timestamp())
+        ts.nanos = int((dt.timestamp() % 1) * 1e9)
+    return ts
+
+class OptiPilotServiceImpl(prediction_pb2_grpc.OptiPilotServiceServicer):
+    def __init__(
+        self,
+        registry: ModelRegistry,
+        metrics: MetricsStore,
+        trainer: Trainer,
+        inference: InferenceEngine,
+        config: Config,
+        logger: logging.Logger,
+        scheduler: "ForecasterScheduler | None" = None,
+    ) -> None:
+        self._registry = registry
+        self._metrics = metrics
+        self._trainer = trainer
+        self._inference = inference
+        self._config = config
+        self._log = logger
+        self._scheduler = scheduler
+
+    async def GetPrediction(
+        self, request: prediction_pb2.GetPredictionRequest, context: grpc.aio.ServicerContext
+    ) -> prediction_pb2.GetPredictionResponse:
+        try:
+            service_name = request.service_name
+            recent_rps = list(request.recent_rps)
+            last_rps = recent_rps[-1] if recent_rps else 0.0
+
+            recent_metrics = await self._metrics.get_recent(service_name, minutes=40)
+            result = None
+
+            if len(recent_metrics) >= 30:
+                result = await self._inference.predict(service_name, recent_metrics)
+
+            if result is not None:
+                proto_mode = _SCALING_MODE_TO_PROTO.get(
+                    result.scaling_mode, prediction_pb2.SCALING_MODE_REACTIVE
+                )
+                predicted_at = _ts_from_proto(request.timestamp)
+                horizon = int(self._config.inference.forecast_horizons_min[0])
+                await self._metrics.insert_prediction(
+                    StoredPrediction(
+                        service_name=service_name,
+                        predicted_at=predicted_at,
+                        horizon_min=horizon,
+                        predicted_rps_p50=result.rps_p50,
+                        predicted_rps_p90=result.rps_p90,
+                        scaling_mode=result.scaling_mode,
+                        model_version=result.model_version,
+                        confidence_score=result.confidence_score,
+                    )
+                )
+                return prediction_pb2.GetPredictionResponse(
+                    service_name=service_name,
+                    rps_p50=result.rps_p50,
+                    rps_p90=result.rps_p90,
+                    recommended_replicas=result.recommended_replicas,
+                    scaling_mode=proto_mode,
+                    confidence_score=result.confidence_score,
+                    reason=result.reason,
+                    model_version=result.model_version,
+                )
+
+            # Fallback: not enough data or no promoted model yet.
+            rps_p90 = last_rps * 1.2
+            return prediction_pb2.GetPredictionResponse(
+                service_name=service_name,
+                rps_p50=last_rps,
+                rps_p90=rps_p90,
+                recommended_replicas=max(2, int(rps_p90 / 100) + 1),
+                scaling_mode=prediction_pb2.SCALING_MODE_REACTIVE,
+                confidence_score=0.0,
+                reason="fallback",
+                model_version="bootstrap-v0",
+            )
+        except Exception as exc:
+            self._log.exception("GetPrediction failed", exc_info=exc)
+            await context.abort(grpc.StatusCode.INTERNAL, str(exc))
+
+    async def TriggerRetrain(
+        self, request: prediction_pb2.TriggerRetrainRequest, context: grpc.aio.ServicerContext
+    ) -> prediction_pb2.TriggerRetrainResponse:
+        service_name = request.service_name
+        min_points = self._config.training.min_data_points
+        fetch_minutes = max(min_points * 2, min_points + 120)
+        metrics = await self._metrics.get_recent(service_name, minutes=fetch_minutes)
+
+        try:
+            result = await self._trainer.train_service(service_name, metrics)
+            if result.promoted:
+                self._inference.invalidate_cache(service_name)
+        except Exception as exc:
+            return prediction_pb2.TriggerRetrainResponse(
+                success=False, message=f"training error: {exc}"
+            )
+
+        return prediction_pb2.TriggerRetrainResponse(
+            success=result.promoted,
+            new_model_version=result.version,
+            new_mape=result.validation_mape_p50,
+            message="trained successfully",
+        )
+
+========================================================================
+FILE: forecaster/src/forecaster/ml/trainer.py
+DESCRIPTION: LightGBM quantile trainer core ML Logic
+========================================================================
+
+"""
+LightGBM quantile trainer.
+
+One `train_service(name, metrics)` call does the whole pipeline:
+  check data count -> build features -> time-ordered split ->
+  train p50 + p90 models -> evaluate MAPE on holdout -> auto-increment version
+  -> save .pkl files -> register in ModelRegistry -> decide promotion.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import time
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+import lightgbm as lgb
+import numpy as np
+
+from forecaster.config import Config
+from forecaster.ml.features import FEATURE_CONFIG_HASH, FEATURE_NAMES, build_features, compute_mape
+from forecaster.ml.storage import model_path, save_model
+from forecaster.models import ModelRecord, ModelStatus, ServiceMetric
+from forecaster.storage.registry import ModelRegistry
+
+_LGB_BASE_PARAMS: dict[str, Any] = {
+    "objective": "quantile",
+    "metric": "quantile",
+    "num_leaves": 31,
+    "learning_rate": 0.05,
+    "min_data_in_leaf": 20,
+    "feature_fraction": 0.9,
+    "bagging_fraction": 0.8,
+    "bagging_freq": 5,
+    "verbose": -1,
+}
+
+_NUM_BOOST_ROUND = 200
+_EARLY_STOPPING_ROUNDS = 20
+_FORECAST_HORIZON_MIN = 5
+
+class Trainer:
+    def __init__(self, config: Config, registry: ModelRegistry, models_dir: Path, logger) -> None:
+        self._config = config
+        self._registry = registry
+        self._models_dir = Path(models_dir)
+        self._log = logger
+
+    async def train_service(self, service_name: str, metrics: list[ServiceMetric], *, use_hyperparameter_search: bool = False, training_window_label: str = "default"):
+        min_points = self._config.training.min_data_points
+        training_bundle = await asyncio.to_thread(self._train_sync, metrics, use_hyperparameter_search)
+
+        version = await self._next_version(service_name)
+        p50_path = model_path(self._models_dir, service_name, version, "p50")
+        p90_path = model_path(self._models_dir, service_name, version, "p90")
+
+        await asyncio.to_thread(save_model, training_bundle["booster_p50"], p50_path)
+        await asyncio.to_thread(save_model, training_bundle["booster_p90"], p90_path)
+
+        now = datetime.now(tz=timezone.utc)
+        record = ModelRecord(
+            service_name=service_name,
+            version=version,
+            created_at=now,
+            trained_on_points=training_bundle["trained_on_points"],
+            training_window_start=training_bundle["training_window_start"],
+            training_window_end=training_bundle["training_window_end"],
+            validation_mape=training_bundle["mape_p50"],
+            is_promoted=False,
+            file_path=str(p50_path),
+            feature_config_hash=FEATURE_CONFIG_HASH,
+        )
+        await self._registry.register_model(record)
+
+        current = await self._registry.get_promoted_model(service_name)
+        previous_mape = current.validation_mape if current else 0.0
+        promote = self._should_promote(new_mape=training_bundle["mape_p50"], current=current)
+
+        if promote:
+            await self._registry.promote_model(service_name, version)
+        
+        return training_bundle
+
+    def _train_sync(self, metrics: list[ServiceMetric], use_hyperparameter_search: bool) -> dict[str, Any]:
+        X, y, ts = build_features(metrics, horizon_min=_FORECAST_HORIZON_MIN)
+        holdout_frac = self._config.training.holdout_percent / 100.0
+        split_idx = int(len(X) * (1.0 - holdout_frac))
+
+        X_train, X_val = X.iloc[:split_idx], X.iloc[split_idx:]
+        y_train, y_val = y.iloc[:split_idx], y.iloc[split_idx:]
+
+        train_ds = lgb.Dataset(X_train, label=y_train, feature_name=FEATURE_NAMES)
+        val_ds = lgb.Dataset(X_val, label=y_val, reference=train_ds, feature_name=FEATURE_NAMES)
+
+        booster_p50 = _train_quantile_model(train_ds, val_ds, alpha=0.5, num_leaves=31, learning_rate=0.05)
+        booster_p90 = _train_quantile_model(train_ds, val_ds, alpha=0.9, num_leaves=31, learning_rate=0.05)
+        
+        pred_p50 = booster_p50.predict(X_val, num_iteration=booster_p50.best_iteration)
+        mape_p50 = compute_mape(y_val.to_numpy(), np.asarray(pred_p50))
+
+        return {
+            "booster_p50": booster_p50,
+            "booster_p90": booster_p90,
+            "mape_p50": mape_p50,
+            "trained_on_points": int(len(X_train)),
+        }
+
+    def _should_promote(self, new_mape: float, current: ModelRecord | None) -> bool:
+        threshold = self._config.training.acceptance_mape_threshold
+        if current is None:
+            return True
+        if new_mape >= threshold:
+            return False
+        return new_mape <= current.validation_mape * (1.0 + self._config.training.promotion_tolerance)
+
+def _train_quantile_model(train_ds, val_ds, alpha: float, *, num_leaves: int, learning_rate: float) -> lgb.Booster:
+    params = {
+        **_LGB_BASE_PARAMS,
+        "alpha": alpha,
+        "num_leaves": num_leaves,
+        "learning_rate": learning_rate,
+    }
+    return lgb.train(
+        params,
+        train_ds,
+        num_boost_round=_NUM_BOOST_ROUND,
+        valid_sets=[val_ds],
+        callbacks=[lgb.early_stopping(_EARLY_STOPPING_ROUNDS, verbose=False)],
+    )
+
+========================================================================
+FILE: forecaster/src/forecaster/ml/inference.py
+DESCRIPTION: Lazy model cache and prediction logic for Machine Learning 
+========================================================================
+
+"""
+InferenceEngine — lazy model cache + prediction logic.
+
+Lifecycle:
+  1. get_model() checks the registry for the currently promoted version.
+  2. If the cache is cold or stale, load .pkl files from disk via asyncio.to_thread.
+  3. predict() builds a feature row from recent metrics and calls both boosters.
+  4. invalidate_cache() is called by TriggerRetrain after a new promotion so
+     the next GetPrediction reloads from disk without a server restart.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import math
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Optional
+
+import lightgbm as lgb
+
+from forecaster.config import Config
+from forecaster.ml.features import FEATURE_CONFIG_HASH, build_features
+from forecaster.ml.storage import load_model, model_path
+from forecaster.models import PredictionResult, ServiceMetric
+from forecaster.storage.registry import ModelRegistry
+
+@dataclass
+class CachedModel:
+    service_name: str
+    version: str
+    p50_booster: lgb.Booster
+    p90_booster: lgb.Booster
+    feature_config_hash: str
+    loaded_at: datetime
+
+class InferenceEngine:
+    def __init__(self, registry: ModelRegistry, models_dir: Path, config: Config, logger) -> None:
+        self._registry = registry
+        self._models_dir = Path(models_dir)
+        self._config = config
+        self._cache = {}
+        self._load_lock = asyncio.Lock()
+
+    async def get_model(self, service_name: str) -> Optional[CachedModel]:
+        async with self._load_lock:
+            record = await self._registry.get_promoted_model(service_name)
+            if record is None:
+                return None
+
+            cached = self._cache.get(service_name)
+            if cached is not None and cached.version == record.version:
+                return cached
+
+            p50_path = model_path(self._models_dir, service_name, record.version, "p50")
+            p90_path = model_path(self._models_dir, service_name, record.version, "p90")
+
+            p50_booster = await asyncio.to_thread(load_model, p50_path)
+            p90_booster = await asyncio.to_thread(load_model, p90_path)
+
+            cached = CachedModel(
+                service_name=service_name,
+                version=record.version,
+                p50_booster=p50_booster,
+                p90_booster=p90_booster,
+                feature_config_hash=record.feature_config_hash,
+                loaded_at=datetime.now(tz=timezone.utc),
+            )
+            self._cache[service_name] = cached
+            return cached
+
+    async def predict(self, service_name: str, recent_metrics: list[ServiceMetric]) -> Optional[PredictionResult]:
+        model = await self.get_model(service_name)
+        if model is None or model.feature_config_hash != FEATURE_CONFIG_HASH:
+            return None
+
+        status = await self._registry.get_status(service_name)
+        X, _, _ = await asyncio.to_thread(build_features, recent_metrics, 5)
+        if len(X) == 0:
+            return None
+
+        last_row = X.iloc[-1:].values
+        p50_arr = await asyncio.to_thread(model.p50_booster.predict, last_row)
+        p90_arr = await asyncio.to_thread(model.p90_booster.predict, last_row)
+
+        p50 = max(0.0, float(p50_arr[0]))
+        p90 = max(p50, float(p90_arr[0]))
+
+        capacity = self._config.inference.default_capacity_per_replica
+        headroom = self._config.inference.default_headroom_factor
+        recommended = max(2, math.ceil((p90 / capacity) * (1.0 + headroom)))
+
+        interval_width = (p90 - p50) / max(p50, 1.0)
+        mode = "PREDICTIVE" if interval_width < 0.40 else ("CONSERVATIVE" if interval_width < 0.60 else "REACTIVE")
+
+        return PredictionResult(
+            service_name=service_name,
+            rps_p50=p50,
+            rps_p90=p90,
+            recommended_replicas=recommended,
+            scaling_mode=mode,
+            confidence_score=0.85,
+            reason="success",
+            model_version=model.version,
+        )
+
+    def invalidate_cache(self, service_name: str) -> None:
+        self._cache.pop(service_name, None)
+Scaling Audit Log
+TIMESTAMP	SERVICE	ACTION	REASON	DIFF
+5/18/2026, 8:42:15 

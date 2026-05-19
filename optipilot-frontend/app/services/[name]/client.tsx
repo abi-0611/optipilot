@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useMemo, useState } from "react";
 import {
   CartesianGrid,
@@ -453,6 +454,14 @@ export function ServiceClientView({ name }: { name: string }) {
             </span>
           </p>
           {modelError ? <p className="text-xs text-red-400">Model status unavailable</p> : null}
+          <div className="pt-2">
+            <Link 
+              href="/models" 
+              className="text-xs text-cyan-400 hover:text-cyan-300 font-medium flex items-center gap-1 transition-colors"
+            >
+              View all models status →
+            </Link>
+          </div>
         </section>
 
         <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-6 xl:col-span-2">

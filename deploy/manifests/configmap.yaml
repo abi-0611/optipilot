@@ -6,7 +6,7 @@ metadata:
 data:
   optipilot.yaml: |
     prometheus:
-      address: "http://kube-prometheus-stack-prometheus.monitoring.svc:9090"
+      address: "http://prometheus-kube-prometheus-prometheus.default.svc.cluster.local:9090"
       query_timeout_sec: 10
 
     discovery:
@@ -43,7 +43,7 @@ data:
       kill_switch_service_prefix: "service."
 
     forecaster:
-      grpc_address: "optipilot-forecaster:50051"
+      grpc_address: "optipilot-forecaster.optipilot-system.svc.cluster.local:50051"
       timeout_sec: 10
 
     dashboard:

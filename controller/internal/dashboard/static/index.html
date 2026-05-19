@@ -7,47 +7,69 @@
   <style>
     :root {
       color-scheme: dark;
+      --bg: #0a1118;
+      --bg-soft: #0f1a26;
+      --card: #121f2f;
+      --card-border: #243447;
+      --text: #e8edf3;
+      --text-muted: #9fb1c4;
+      --accent: #2dd4bf;
+      --danger: #f97373;
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
       font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-      background: #0b0f14;
-      color: #e5e7eb;
+      background:
+        radial-gradient(circle at 80% -10%, rgba(45, 212, 191, 0.08), transparent 40%),
+        radial-gradient(circle at 0% 0%, rgba(59, 130, 246, 0.08), transparent 35%),
+        var(--bg);
+      color: var(--text);
     }
     main {
       max-width: 1200px;
       margin: 0 auto;
-      padding: 20px;
+      padding: 28px 20px 32px;
     }
-    h1 { margin: 0; font-size: 1.4rem; }
-    .sub { margin-top: 6px; color: #94a3b8; font-size: .9rem; }
+    h1 {
+      margin: 0;
+      font-size: 1.7rem;
+      letter-spacing: -0.02em;
+    }
+    h2 {
+      margin: 0 0 10px;
+      font-size: 1.08rem;
+      letter-spacing: 0.01em;
+    }
+    .sub { margin-top: 8px; color: var(--text-muted); font-size: .95rem; }
     .status {
       display: flex;
       flex-wrap: wrap;
       gap: 10px;
-      margin: 14px 0 18px;
+      margin: 18px 0 20px;
     }
     .pill {
-      border: 1px solid #334155;
+      border: 1px solid #31506a;
       border-radius: 999px;
-      padding: 6px 10px;
+      padding: 7px 11px;
       font-size: 12px;
-      background: #111827;
-      color: #cbd5e1;
+      line-height: 1;
+      background: rgba(12, 23, 36, 0.8);
+      color: #c9d9e8;
     }
-    .pill.ok { border-color: #047857; color: #6ee7b7; }
-    .pill.bad { border-color: #7f1d1d; color: #fca5a5; }
+    .pill.ok { border-color: #0f766e; color: #5eead4; }
+    .pill.bad { border-color: #b91c1c; color: #fca5a5; }
     .grid {
       display: grid;
       grid-template-columns: repeat(12, 1fr);
-      gap: 14px;
+      gap: 16px;
     }
     .card {
-      border: 1px solid #1f2937;
-      background: #111827;
-      border-radius: 10px;
-      padding: 14px;
+      border: 1px solid var(--card-border);
+      background: linear-gradient(180deg, rgba(18, 31, 47, 0.96), rgba(15, 26, 38, 0.96));
+      border-radius: 14px;
+      padding: 16px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
     }
     .services { grid-column: span 7; }
     .audit { grid-column: span 5; }
@@ -58,51 +80,77 @@
     table { width: 100%; border-collapse: collapse; font-size: 13px; }
     th, td {
       text-align: left;
-      padding: 7px 6px;
-      border-bottom: 1px solid #1f2937;
+      padding: 9px 8px;
+      border-bottom: 1px solid rgba(49, 80, 106, 0.35);
       vertical-align: top;
     }
-    th { color: #94a3b8; font-weight: 600; }
+    th { color: var(--text-muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+    tbody tr:hover { background: rgba(255, 255, 255, 0.02); }
     td code {
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      background: #0f172a;
-      border: 1px solid #1f2937;
+      background: rgba(10, 17, 24, 0.9);
+      border: 1px solid rgba(49, 80, 106, 0.4);
       padding: 2px 6px;
       border-radius: 6px;
     }
-    .muted { color: #94a3b8; }
-    .empty { color: #64748b; font-size: 13px; margin: 8px 0 0; }
+    .muted { color: var(--text-muted); }
+    .empty { color: #7f96ab; font-size: 13px; margin: 10px 0 0; }
     .feed {
       max-height: 260px;
       overflow: auto;
       margin: 0;
       padding-left: 18px;
       font-size: 13px;
-      line-height: 1.35rem;
-      color: #cbd5e1;
+      line-height: 1.5rem;
+      color: #d6e2ee;
     }
+    .feed li { padding-right: 8px; }
     .actions {
-      margin-top: 8px;
+      margin-top: 12px;
       display: flex;
       gap: 10px;
       flex-wrap: wrap;
     }
     button {
-      background: #1f2937;
-      color: #e2e8f0;
-      border: 1px solid #334155;
-      border-radius: 8px;
+      background: rgba(20, 34, 49, 0.9);
+      color: #e6eef8;
+      border: 1px solid #31506a;
+      border-radius: 10px;
       font-size: 12px;
-      padding: 6px 10px;
+      font-weight: 600;
+      letter-spacing: .01em;
+      padding: 8px 12px;
       cursor: pointer;
+      transition: background 160ms ease, border-color 160ms ease, transform 120ms ease;
     }
-    button:hover { background: #334155; }
-    .warn { color: #fbbf24; font-size: 12px; margin-top: 8px; }
+    button:hover {
+      background: rgba(28, 48, 70, 0.95);
+      border-color: #3b6585;
+      transform: translateY(-1px);
+    }
+    button:active { transform: translateY(0); }
+    .warn {
+      color: #facc15;
+      font-size: 12px;
+      margin-top: 10px;
+      background: rgba(250, 204, 21, 0.08);
+      border: 1px solid rgba(250, 204, 21, 0.25);
+      padding: 8px 10px;
+      border-radius: 10px;
+    }
+    @media (max-width: 600px) {
+      main { padding: 18px 12px 20px; }
+      h1 { font-size: 1.4rem; }
+      .card { padding: 12px; border-radius: 12px; }
+      th, td { padding: 8px 6px; }
+      .status { gap: 8px; }
+      .pill { font-size: 11px; }
+    }
   </style>
 </head>
 <body>
   <main>
-    <h1>OptiPilot Dashboard (Embedded)</h1>
+    <h1>OptiPilot Dashboard</h1>
     <div class="sub">REST + WebSocket fallback UI served by the controller binary.</div>
 
     <div class="status">
